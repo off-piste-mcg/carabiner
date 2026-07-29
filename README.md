@@ -56,34 +56,44 @@ carabiner -o ~/Desktop "URL"                              # different output fol
 
 ## The no-Terminal flow (macOS Shortcut)
 
-The goal: be on a post → hit a hotkey → file lands in Downloads. No copying, no
-Terminal. This is a one-time setup in the **Shortcuts** app:
+The goal: be on a post → hit a hotkey → file lands in Downloads. No copying, no Terminal.
 
-1. Open **Shortcuts** → **＋** new shortcut. Name it **Carabiner**.
-2. Shortcuts **Settings → Advanced →** tick **Allow Running Scripts** (one-time; macOS
-   disables shell actions by default).
-3. Add the action **Run Shell Script** (search "shell"). Set **Shell** to `zsh` and
-   paste exactly (no `"$1"`, no Get Clipboard action needed):
+### 1. Add the shortcut — one click
+
+### → **[Add the Carabiner shortcut](https://www.icloud.com/shortcuts/1633ebc20bf04369a20ccab25b38dc8b)**
+
+Click it, then **Add Shortcut** in the window that opens. That's the whole thing — it
+finds `carabiner` whether you're on Apple Silicon or Intel. The first time you run it,
+macOS asks two one-time permissions: **Allow Running Scripts** and permission for
+Shortcuts to control your browser — click **Allow** for both.
+
+### 2. Set your hotkey — each Mac picks its own
+
+Keyboard shortcuts aren't stored inside a shared shortcut, so choose yours: in the
+**Shortcuts** app, right-click **Carabiner** in the sidebar → **Add Keyboard Shortcut**
+→ press your combo (e.g. ⌃⌥⌘V).
+
+### That's it
+
+Open a reel/post in your browser → hit your hotkey → the file lands in `~/Downloads`,
+and a **macOS notification** confirms it (`✓ Saved to Downloads` + filename, or
+`✗ Grab failed` with the reason, e.g. not logged into Instagram). Carabiner reads your
+**front browser tab's URL** automatically (falling back to the clipboard). Cookies come
+from Chrome by default — `export CARABINER_BROWSER=safari` for another browser.
+
+<details>
+<summary>Prefer to build the shortcut by hand?</summary>
+
+1. Open **Shortcuts** → **＋** new shortcut, name it **Carabiner**.
+2. **Settings → Advanced →** tick **Allow Running Scripts** (macOS disables shell
+   actions by default).
+3. Add **Run Shell Script**, set **Shell** to `zsh`, and paste:
    ```sh
-   /opt/homebrew/bin/carabiner
+   CB=/opt/homebrew/bin/carabiner; [ -x "$CB" ] || CB=/usr/local/bin/carabiner; "$CB"
    ```
-   (Apple Silicon path. Intel Mac: `/usr/local/bin/carabiner`. Run `which carabiner`.)
-4. **Global hotkey:** right-click the shortcut in the sidebar → **Add Keyboard
-   Shortcut**, e.g. ⌃⌥⌘V.
+4. Right-click the shortcut → **Add Keyboard Shortcut** → pick your combo.
 
-With no URL argument, Carabiner reads the **front browser tab's URL** automatically
-(falling back to the clipboard) — so the flow is simply: open the reel/post in Chrome →
-press the hotkey. The first run asks permission for Shortcuts to control Chrome — click
-**Allow**.
-
-When launched from the hotkey, Carabiner shows a **macOS notification** when it's
-done — `✓ Saved to Downloads` with the filename, or `✗ Grab failed` with the reason (so
-a press that finds nothing tells you *why*, e.g. not logged into Instagram). Runs from a
-terminal stay quiet and just print instead.
-
-**Share Sheet (optional):** open the shortcut's **ⓘ** details → tick **Use as Quick
-Action → Share Sheet**, set **Accepts: URLs / Text**, and change the script to
-`/opt/homebrew/bin/carabiner "$1"` so the shared URL is passed in.
+</details>
 
 ---
 

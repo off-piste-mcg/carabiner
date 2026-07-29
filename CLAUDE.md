@@ -39,7 +39,13 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
     failure (the error) via `osascript display notification`. Silent in a terminal.
     Generic (Script Editor) icon — see gotcha #10 for why it isn't the logo.
 - **`setup.sh`** — installs the three deps via Homebrew, links `carabiner`/`clip`/`crab`.
-- **`README.md`** — team setup + the macOS Shortcut wiring (the manual GUI step).
+- **`README.md`** — team setup + the macOS Shortcut wiring.
+- **Shipped:** public repo at `github.com/off-piste-mcg/carabiner` (clone + `./setup.sh`).
+  The macOS Shortcut is shared as an **iCloud link** in the README
+  (`icloud.com/shortcuts/1633ebc20bf04369a20ccab25b38dc8b`) — one-click add, then each
+  user sets their own hotkey (keyboard shortcuts aren't stored in a shared shortcut).
+  The shortcut's Run Shell Script uses a portable one-liner so it finds `carabiner` on
+  both Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`).
 - **`files/`** — original seed: proven `igdl`/`igdls` functions + the `ig-grab.js`
   bookmarklet. Reference only.
 
