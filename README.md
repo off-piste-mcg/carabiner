@@ -63,9 +63,16 @@ The goal: be on a post → hit a hotkey → file lands in Downloads. No copying,
 ### → **[Add the Carabiner shortcut](https://www.icloud.com/shortcuts/1633ebc20bf04369a20ccab25b38dc8b)**
 
 Click it, then **Add Shortcut** in the window that opens. That's the whole thing — it
-finds `carabiner` whether you're on Apple Silicon or Intel. The first time you run it,
-macOS asks two one-time permissions: **Allow Running Scripts** and permission for
-Shortcuts to control your browser — click **Allow** for both.
+finds `carabiner` whether you're on Apple Silicon or Intel.
+
+**Then enable shell scripts (one-time, required):** open the **Shortcuts** app →
+**Settings** (⌘,) → **Advanced** → turn on **Allow Running Scripts**. macOS blocks
+script actions by default, so without this the shortcut *errors* with "this action
+can't be run… script actions aren't allowed" (it does **not** prompt you). On a
+non-English Mac the tab/toggle are localised (e.g. Dutch: **Opdrachten → Instellingen →
+Geavanceerd → Sta uitvoeren van scripts toe**).
+
+The first run also asks permission for Shortcuts to control your browser — click **Allow**.
 
 ### 2. Set your hotkey — each Mac picks its own
 
