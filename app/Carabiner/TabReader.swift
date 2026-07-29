@@ -13,6 +13,15 @@ enum Browser: String, CaseIterable {
     }
 }
 
+/// What `resolve()` came back with. Denied Automation is called out separately because
+/// it is the likeliest first-run stumble, and "no link anywhere" is the wrong thing to
+/// tell someone who just clicked *Don't Allow*.
+enum TabResolution: Equatable {
+    case url(String)
+    case notAuthorized
+    case nothing
+}
+
 struct TabReader {
     var browser: Browser
 
@@ -31,22 +40,46 @@ struct TabReader {
         return nil
     }
 
-    /// Convenience wiring the real sources.
-    func resolve(argument: String? = nil) -> String? {
-        resolveURL(argument: argument,
-                   tabURL: { frontTabURL(for: browser) },
-                   clipboard: { NSPasteboard.general.string(forType: .string) })
+    /// Convenience wiring the real sources. A refused Apple Event only surfaces when
+    /// nothing else produced a URL — a link on the clipboard is still perfectly grabbable.
+    /// The browser is still only asked when it has to be: `tabURL` stays lazy.
+    func resolve(argument: String? = nil) -> TabResolution {
+        var refused = false
+        let url = resolveURL(argument: argument,
+                             tabURL: {
+                                 let tab = frontTabURL(for: browser)
+                                 refused = tab.notAuthorized
+                                 return tab.url
+                             },
+                             clipboard: { NSPasteboard.general.string(forType: .string) })
+        if let url { return .url(url) }
+        return refused ? .notAuthorized : .nothing
     }
 }
 
-func frontTabURL(for browser: Browser) -> String? {
+/// `errAEEventNotPermitted` — the user denied (or has not granted) Automation access
+/// for this browser. Indistinguishable from "no tab" unless we read the error out.
+private let errAEEventNotPermitted = -1743
+
+func frontTabURL(for browser: Browser) -> (url: String?, notAuthorized: Bool) {
     let script: String
     if browser == .safari {
         script = "tell application \"\(browser.appName)\" to get URL of front document"
     } else {
         script = "tell application \"\(browser.appName)\" to get URL of active tab of front window"
     }
+    guard let apple = NSAppleScript(source: script) else {
+        NSLog("Carabiner: couldn't compile the front-tab AppleScript for %@", browser.appName)
+        return (nil, false)
+    }
     var err: NSDictionary?
-    let out = NSAppleScript(source: script)?.executeAndReturnError(&err)
-    return out?.stringValue
+    let out = apple.executeAndReturnError(&err)
+    if let err {
+        let code = (err[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+        let message = (err[NSAppleScript.errorMessage] as? String) ?? "no message"
+        NSLog("Carabiner: front-tab AppleScript failed for %@ (error %d): %@",
+              browser.appName, code, message)
+        return (nil, code == errAEEventNotPermitted)
+    }
+    return (out.stringValue, false)
 }

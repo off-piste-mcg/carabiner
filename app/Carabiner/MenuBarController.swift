@@ -3,8 +3,12 @@ import AppKit
 final class MenuBarController: NSObject {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let notifier = Notifier()
-    private let tabReader = TabReader(browser: .chrome)
-    private let runner = GrabRunner()
+    /// One browser for the whole flow. The tab we read the URL from has to be the same
+    /// one `carabiner` pulls cookies from, so both sides are built from this constant.
+    /// Phase 2 turns it into a picker.
+    private static let browser: Browser = .chrome
+    private let tabReader = TabReader(browser: MenuBarController.browser)
+    private let runner = GrabRunner(browser: MenuBarController.browser)
     private var busy = false
 
     override init() {
@@ -12,6 +16,8 @@ final class MenuBarController: NSObject {
         if let button = statusItem.button {
             button.image = NSImage(named: "AppIcon")
             button.image?.size = NSSize(width: 18, height: 18)
+            // Not a template image: templates render as a flat monochrome silhouette,
+            // which would throw away the full-colour OFF-PISTE logo.
             button.image?.isTemplate = false
         }
         let menu = NSMenu()
@@ -28,7 +34,14 @@ final class MenuBarController: NSObject {
 
     @objc func grab() {
         guard !busy else { return }
-        guard let url = tabReader.resolve() else {
+        let url: String
+        switch tabReader.resolve() {
+        case .url(let u):
+            url = u
+        case .notAuthorized:
+            notifier.show(GrabResult(ok: false, message: "Allow Carabiner to control \(Self.browser.appName) under System Settings → Privacy & Security → Automation, then try again"))
+            return
+        case .nothing:
             notifier.show(GrabResult(ok: false, message: "No link in your browser tab or clipboard"))
             return
         }
