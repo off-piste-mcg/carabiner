@@ -1,0 +1,39 @@
+name: Carabiner
+options:
+  bundleIdPrefix: com.offpiste
+  deploymentTarget:
+    macOS: "13.0"
+packages:
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 2.0.0
+targets:
+  Carabiner:
+    type: application
+    platform: macOS
+    sources: [Carabiner]
+    dependencies:
+      - package: KeyboardShortcuts
+    info:
+      path: Carabiner/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleName: Carabiner
+        CFBundleDisplayName: Carabiner
+        NSHumanReadableCopyright: "OFF-PISTE"
+        LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
+        NSAppleEventsUsageDescription: "Carabiner reads your active browser tab's URL so it can grab the media you're viewing."
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+  CarabinerTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [CarabinerTests]
+    dependencies:
+      - target: Carabiner
