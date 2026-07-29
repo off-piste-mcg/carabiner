@@ -58,6 +58,7 @@ info() { echo "$*"; }
 # on every Mac). A custom logo icon needs a per-machine-authorised app — too fragile
 # for a shared tool; see gotcha #10.
 notify() {  # $1 = title line, $2 = body
+  [ -n "${CARABINER_NO_NOTIFY:-}" ] && return 0
   [ "$NOTIFY" -eq 1 ] || return 0
   local title="${1//\"/}" body="${2//\"/}"
   osascript -e "display notification \"$body\" with title \"Carabiner\" subtitle \"$title\"" >/dev/null 2>&1
