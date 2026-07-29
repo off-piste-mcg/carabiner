@@ -21,6 +21,59 @@ final class GrabRunnerTests: XCTestCase {
         let stub = writeStub("echo '  ✓ ABC_fixed.mp4'; echo Done; exit 0")
         let result = GrabRunner(executable: stub).run(url: "https://x/y")
         XCTAssertTrue(result.ok)
+        // The filename is the whole point of the banner — it must survive to the message.
+        XCTAssertEqual(result.message, "ABC_fixed.mp4")
+    }
+
+    /// The URL must arrive as the single argument, and `CARABINER_NO_NOTIFY` /
+    /// `CARABINER_BROWSER` must reach the child: the first is the entire contract with
+    /// the script's notify gate (regress it and users get two banners), the second keeps
+    /// the cookies coming from the same browser we read the tab from.
+    func testPassesURLAndEnvironmentToScript() {
+        let stub = writeStub(#"echo "  ✓ $#|$1|${CARABINER_NO_NOTIFY:-unset}|${CARABINER_BROWSER:-unset}"; exit 0"#)
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "1|https://x/y|1|safari")
+    }
+
+    /// Several saves (a carousel) collapse to a count rather than one arbitrary filename.
+    func testMultipleSavesSummarised() {
+        let stub = writeStub("echo '  ✓ ABC_s1.jpg'; echo '  ✓ ABC_s2.jpg'; echo '  ✓ ABC_s3.mp4'; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "3 files")
+    }
+
+    /// Cancelling the carousel prompt makes `carabiner` exit 0 having saved nothing
+    /// (`cancel) info "  cancelled."; exit 0`). That must not banner as a success — nor
+    /// read like a crash.
+    func testExitZeroWithoutMarkerIsNotSuccess() {
+        let stub = writeStub("echo 'carabiner → instagram'; echo '  cancelled.'; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "Nothing saved")
+    }
+
+    /// yt-dlp reports progress with carriage returns, so the whole download can land as
+    /// one `\r`-separated blob. Splitting on `\n` alone would hide the ✓ inside it.
+    func testCarriageReturnProgressStillYieldsTheMarker() {
+        let stub = writeStub(#"printf '[dl]  10%%\r[dl] 100%%\r  ✓ saved to ~/Downloads\n'; exit 0"#)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "saved to ~/Downloads")
+    }
+
+    /// `carabiner` asks the carousel question with `read` when stdin is a TTY. Run the app
+    /// from a terminal and an inherited TTY would block it forever, so stdin is /dev/null.
+    func testChildStdinIsNotATTY() {
+        let stub = writeStub("if [ -t 0 ]; then echo '  ✓ tty'; else echo '  ✓ notty'; fi; exit 0")
+        XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "notty")
+    }
+
+    /// A "✗ " that isn't leading is part of the message, not decoration.
+    func testOnlyLeadingFailureMarkerIsStripped() {
+        let stub = writeStub(#"echo '✗ bad ✗ marker' 1>&2; exit 1"#)
+        XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "bad ✗ marker")
     }
 
     func testFailureReportsLastLine() {
