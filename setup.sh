@@ -24,7 +24,7 @@ for dep in yt-dlp ffmpeg gallery-dl; do
   if command -v "$dep" >/dev/null 2>&1; then
     echo "✓ $dep already installed"
   else
-    echo "→ installing $dep…"
+    echo "→ installing ${dep}…"
     brew install "$dep"
   fi
 done
