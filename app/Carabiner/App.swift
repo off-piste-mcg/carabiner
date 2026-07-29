@@ -20,6 +20,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        menuBar = MenuBarController()
+        let controller = MenuBarController()
+        menuBar = controller
+        Notifier().requestAuthorization()
+        Hotkey.onGrab { [weak controller] in controller?.grab() }
     }
 }
