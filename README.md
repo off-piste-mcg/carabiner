@@ -13,15 +13,20 @@ trick — and the reason it can't (and shouldn't) be a website. See
 
 ---
 
-## Setup (once per Mac)
+## Get it (once per Mac)
 
 ```bash
+git clone https://github.com/off-piste-mcg/carabiner.git
+cd carabiner
 ./setup.sh
 ```
 
-Installs `yt-dlp`, `ffmpeg`, and `gallery-dl` via Homebrew, then links `carabiner`
-(plus the `clip` / `crab` aliases) onto your PATH. Re-runnable; installs only what's
-missing. Needs [Homebrew](https://brew.sh).
+`setup.sh` installs `yt-dlp`, `ffmpeg`, and `gallery-dl` via Homebrew, then links
+`carabiner` (plus the `clip` / `crab` aliases) onto your PATH. Re-runnable; installs
+only what's missing. Needs [Homebrew](https://brew.sh).
+
+> Keep the cloned folder around — the `carabiner` command is symlinked to the script
+> inside it. `git pull` in that folder to update.
 
 ## Use
 
