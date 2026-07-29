@@ -1,5 +1,11 @@
 # Local Claude Code settings (machine-specific)
 .claude/
 
+# Agent scratch (plan ledgers, review packages)
+.superpowers/
+
+# Build intermediates (e.g. the generated app icon)
+build/
+
 # macOS
 .DS_Store
