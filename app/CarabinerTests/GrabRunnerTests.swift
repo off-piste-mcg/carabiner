@@ -1,0 +1,113 @@
+import XCTest
+@testable import Carabiner
+
+/// Thread-safe hand-off for a result produced on a background queue.
+private final class ResultBox {
+    private let lock = NSLock()
+    private var value: GrabResult?
+    func set(_ newValue: GrabResult) { lock.lock(); value = newValue; lock.unlock() }
+    func get() -> GrabResult? { lock.lock(); defer { lock.unlock() }; return value }
+}
+
+final class GrabRunnerTests: XCTestCase {
+    private func writeStub(_ body: String) -> String {
+        let path = NSTemporaryDirectory() + "carabiner-stub-\(UUID().uuidString).sh"
+        try! ("#!/bin/bash\n" + body).write(toFile: path, atomically: true, encoding: .utf8)
+        try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return path
+    }
+
+    func testSuccessExitZero() {
+        let stub = writeStub("echo '  ✓ ABC_fixed.mp4'; echo Done; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        // The filename is the whole point of the banner — it must survive to the message.
+        XCTAssertEqual(result.message, "ABC_fixed.mp4")
+    }
+
+    /// The URL must arrive as the single argument, and `CARABINER_NO_NOTIFY` /
+    /// `CARABINER_BROWSER` must reach the child: the first is the entire contract with
+    /// the script's notify gate (regress it and users get two banners), the second keeps
+    /// the cookies coming from the same browser we read the tab from.
+    func testPassesURLAndEnvironmentToScript() {
+        let stub = writeStub(#"echo "  ✓ $#|$1|${CARABINER_NO_NOTIFY:-unset}|${CARABINER_BROWSER:-unset}"; exit 0"#)
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "1|https://x/y|1|safari")
+    }
+
+    /// Several saves (a carousel) collapse to a count rather than one arbitrary filename.
+    func testMultipleSavesSummarised() {
+        let stub = writeStub("echo '  ✓ ABC_s1.jpg'; echo '  ✓ ABC_s2.jpg'; echo '  ✓ ABC_s3.mp4'; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "3 files")
+    }
+
+    /// Cancelling the carousel prompt makes `carabiner` exit 0 having saved nothing
+    /// (`cancel) info "  cancelled."; exit 0`). That must not banner as a success — nor
+    /// read like a crash.
+    func testExitZeroWithoutMarkerIsNotSuccess() {
+        let stub = writeStub("echo 'carabiner → instagram'; echo '  cancelled.'; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "Nothing saved")
+    }
+
+    /// yt-dlp reports progress with carriage returns, so the whole download can land as
+    /// one `\r`-separated blob. Splitting on `\n` alone would hide the ✓ inside it.
+    func testCarriageReturnProgressStillYieldsTheMarker() {
+        let stub = writeStub(#"printf '[dl]  10%%\r[dl] 100%%\r  ✓ saved to ~/Downloads\n'; exit 0"#)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "saved to ~/Downloads")
+    }
+
+    /// `carabiner` asks the carousel question with `read` when stdin is a TTY. Run the app
+    /// from a terminal and an inherited TTY would block it forever, so stdin is /dev/null.
+    func testChildStdinIsNotATTY() {
+        let stub = writeStub("if [ -t 0 ]; then echo '  ✓ tty'; else echo '  ✓ notty'; fi; exit 0")
+        XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "notty")
+    }
+
+    /// A "✗ " that isn't leading is part of the message, not decoration.
+    func testOnlyLeadingFailureMarkerIsStripped() {
+        let stub = writeStub(#"echo '✗ bad ✗ marker' 1>&2; exit 1"#)
+        XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "bad ✗ marker")
+    }
+
+    func testFailureReportsLastLine() {
+        let stub = writeStub("echo 'trying'; echo '✗ not logged in' 1>&2; exit 1")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertTrue(result.message.contains("not logged in"))
+    }
+
+    /// Regression guard: `carabiner` shells out to yt-dlp/ffmpeg, which are very chatty on
+    /// stderr. Draining stdout to EOF before touching stderr deadlocks once the child fills
+    /// stderr's ~64KB pipe buffer. This stub writes ~250KB to *each* stream, so an
+    /// implementation that drains sequentially will hang and blow the expectation timeout
+    /// instead of hanging the whole suite.
+    func testLargeInterleavedOutputDoesNotDeadlock() {
+        let stub = writeStub("""
+        line=$(printf 'x%.0s' {1..200})
+        for i in $(seq 1 1200); do
+          echo "err $i $line" 1>&2
+          echo "out $i $line"
+        done
+        echo '✗ giving up' 1>&2
+        exit 1
+        """)
+        let box = ResultBox()
+        let done = expectation(description: "GrabRunner.run returns instead of deadlocking")
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.set(GrabRunner(executable: stub).run(url: "https://x/y"))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 30)
+
+        let result = box.get()
+        XCTAssertEqual(result?.ok, false)
+        XCTAssertEqual(result?.message, "giving up")
+    }
+}
