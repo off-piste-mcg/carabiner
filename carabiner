@@ -1,0 +1,366 @@
+#!/usr/bin/env bash
+#
+# carabiner — clip media off a URL and hold onto it.
+#
+# A LOCAL macOS tool. It works because it runs as you, using your own browser
+# cookies. Do NOT turn this into a hosted service (Instagram refuses anonymous
+# requests — see CLAUDE.md, "the single most important architectural fact").
+#
+# Paste/share a URL. Carabiner auto-detects image vs video, handles carousels
+# (all slides, or one via img_index / -s), and saves clean, QuickTime-openable
+# files to ~/Downloads.
+#
+# Routing (proven, see CLAUDE.md gotchas):
+#   video      -> yt-dlp, then re-encode to 8-bit yuv420p H.264 (QuickTime-safe)
+#   image/all  -> gallery-dl (yt-dlp refuses carousel images: "No video formats!")
+#
+# Usage:
+#   carabiner                  no URL? grab the front browser tab (else clipboard)
+#   carabiner "URL"            smart: video -> yt-dlp+re-encode, images -> gallery-dl
+#   carabiner -a "URL"         all carousel slides (images + videos), each QuickTime-safe
+#   carabiner -s N "URL"       just slide N of a carousel
+#   carabiner --silent "URL"   video without sound
+#   carabiner -o DIR "URL"     output directory (default: ~/Downloads)
+#   carabiner -h               help
+#
+# A link carrying ?img_index=N is auto-treated as -s N unless you override.
+#
+# Deps: yt-dlp, ffmpeg, gallery-dl  (run ./setup.sh once).
+# Cookies browser: $CARABINER_BROWSER (default: chrome; also safari/firefox/brave/edge).
+
+set -uo pipefail
+
+# Make Homebrew-installed tools (yt-dlp, ffmpeg, gallery-dl) findable even under
+# the stripped-down PATH that macOS Shortcuts / Quick Actions / global hotkeys
+# hand a shell script — otherwise the tool can't find its deps when launched
+# from a hotkey, only from a normal terminal.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+BROWSER="${CARABINER_BROWSER:-chrome}"
+OUTDIR="$HOME/Downloads"
+MODE="smart"        # smart | all | slide
+SLIDE=""
+SILENT=0
+URL=""
+NOTIFY=0            # show a macOS notification when headless (launched from the hotkey)
+[ -t 1 ] || NOTIFY=1
+SAVED=()            # basenames saved this run — drives the notification summary
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+die()  { echo "✗ $*" >&2; notify "✗ Grab failed" "$*"; exit 1; }
+info() { echo "$*"; }
+
+# macOS notification — only when headless (i.e. launched from the hotkey/Shortcut),
+# so terminal runs stay quiet. Plain native banner (reliable, zero-setup, consistent
+# on every Mac). A custom logo icon needs a per-machine-authorised app — too fragile
+# for a shared tool; see gotcha #10.
+notify() {  # $1 = title line, $2 = body
+  [ "$NOTIFY" -eq 1 ] || return 0
+  local title="${1//\"/}" body="${2//\"/}"
+  osascript -e "display notification \"$body\" with title \"Carabiner\" subtitle \"$title\"" >/dev/null 2>&1
+}
+
+usage() {
+  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
+require() {
+  command -v "$1" >/dev/null 2>&1 || die "missing dependency: $1 — run ./setup.sh"
+}
+
+# Extract an Instagram shortcode from /p/, /reel/, /reels/, /tv/ (query stripped).
+ig_shortcode() {
+  echo "$1" | sed -nE 's#.*/(p|reel|reels|tv)/([^/?]+).*#\2#p'
+}
+
+# Pull img_index=N from the URL if present.
+img_index() {
+  echo "$1" | sed -nE 's#.*[?&]img_index=([0-9]+).*#\1#p'
+}
+
+platform() {
+  case "$1" in
+    *instagram.com*|*instagr.am*)      echo instagram ;;
+    *youtube.com*|*youtu.be*)          echo youtube ;;
+    *pinterest.*|*pin.it*)             echo pinterest ;;
+    *)                                 echo generic ;;
+  esac
+}
+
+is_url() { echo "$1" | grep -qiE '^https?://'; }
+
+# Ask the frontmost browser window for its active tab URL (via AppleScript), so
+# you can just BE on a post and fire the hotkey — no copying. Firefox has no
+# scripting hook for this, so those users fall through to the clipboard.
+browser_tab_url() {
+  local app
+  case "$BROWSER" in
+    chrome) app="Google Chrome" ;;
+    brave)  app="Brave Browser" ;;
+    edge)   app="Microsoft Edge" ;;
+    arc)    app="Arc" ;;
+    safari) app="Safari" ;;
+    *)      return 1 ;;
+  esac
+  if [ "$BROWSER" = "safari" ]; then
+    osascript -e "tell application \"$app\" to get URL of front document" 2>/dev/null
+  else
+    osascript -e "tell application \"$app\" to get URL of active tab of front window" 2>/dev/null
+  fi
+}
+
+# Figure out which URL to grab: an explicit argument wins; otherwise read the
+# browser's current tab; otherwise fall back to the clipboard.
+resolve_url() {
+  local a="$1" u
+  if is_url "$a"; then echo "$a"; return 0; fi
+  u="$(browser_tab_url)"; if is_url "$u"; then echo "$u"; return 0; fi
+  u="$(pbpaste 2>/dev/null)"; if is_url "$u"; then echo "$u"; return 0; fi
+  return 1
+}
+
+# How many media items does this post have? (gallery-dl -g lists one URL per
+# slide without downloading.) Echoes a number; 1 if it can't tell.
+ig_item_count() {
+  local n
+  n="$(gallery-dl --cookies-from-browser "$BROWSER" -g "$1" 2>/dev/null | grep -cE '^https?://')"
+  [ "${n:-0}" -ge 1 ] 2>/dev/null && echo "$n" || echo 1
+}
+
+# Ask "just this slide, or the whole carousel?".
+#   terminal -> text prompt;  headless (hotkey) -> plain native macOS dialog.
+# Echoes: slide | all | cancel.  Safe default is `slide` (never grabs nothing by mistake).
+ask_slide_or_all() {
+  local count="$1"
+
+  if [ -t 0 ]; then
+    printf 'Carousel of %s slides — grab just this slide or [a]ll? (s/a) ' "$count" >&2
+    local ans; read -r ans
+    case "$ans" in a|A|all|All) echo all ;; *) echo slide ;; esac
+    return 0
+  fi
+
+  local b
+  b="$(osascript 2>/dev/null <<EOF
+tell application "System Events"
+  activate
+  set r to button returned of (display dialog "This Instagram post is a carousel with $count slides.\n\nGrab just the slide you're on, or the whole carousel?" buttons {"Cancel", "This slide", "All $count"} default button "All $count" with title "Carabiner" with icon note)
+end tell
+return r
+EOF
+)"
+  case "$b" in
+    "This slide") echo slide ;;
+    "Cancel")     echo cancel ;;
+    All*)         echo all ;;
+    *)            echo slide ;;   # dialog failed → safe default
+  esac
+}
+
+# Re-encode any video to a QuickTime-friendly 8-bit yuv420p H.264 mp4.
+#   reencode <in> <out> <silent 0|1>
+reencode() {
+  if [ "$3" -eq 1 ]; then
+    ffmpeg -y -loglevel error -i "$1" -c:v libx264 -pix_fmt yuv420p -an "$2"
+  else
+    ffmpeg -y -loglevel error -i "$1" -c:v libx264 -c:a aac -pix_fmt yuv420p "$2"
+  fi
+}
+
+lower() { echo "$1" | tr 'A-Z' 'a-z'; }
+
+# ---------------------------------------------------------------------------
+# Instagram: video via yt-dlp (single post or one slide), re-encoded.
+# Returns: 0 = got a video, 10 = no video here (caller falls back to images),
+#          1 = hard error.
+# ---------------------------------------------------------------------------
+ig_video() {
+  local url="$1" code="$2" slide="$3" silent="$4"
+  local tmp="$OUTDIR/.carabiner_src_$$"
+  local -a args=(--cookies-from-browser "$BROWSER" -o "${tmp}.%(ext)s")
+  [ -n "$slide" ] && args+=(--playlist-items "$slide")
+  [ "$silent" -eq 1 ] && args+=(-f "bv")
+
+  local log rc
+  log="$(yt-dlp "${args[@]}" "$url" 2>&1)"; rc=$?
+
+  if [ $rc -ne 0 ]; then
+    rm -f "${tmp}".* 2>/dev/null
+    # "No video formats found!" (image slide) -> let the caller try gallery-dl.
+    if echo "$log" | grep -qiE 'no video|there.?s no video|unsupported url'; then
+      return 10
+    fi
+    echo "$log" >&2
+    return 1
+  fi
+
+  local src
+  src="$(ls "${tmp}".* 2>/dev/null | head -n1)"
+  [ -n "$src" ] || { echo "$log" >&2; return 1; }
+
+  local suffix=""
+  [ -n "$slide" ] && suffix="_s${slide}"
+  [ "$silent" -eq 1 ] && suffix="${suffix}_silent"
+  local out="$OUTDIR/${code}${suffix}_fixed.mp4"
+
+  if reencode "$src" "$out" "$silent"; then
+    rm -f "${tmp}".*
+    info "  ✓ ${out##*/}"
+    SAVED+=("${out##*/}")
+    return 0
+  fi
+  rm -f "${tmp}".*
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Instagram: images (and mixed carousels) via gallery-dl. Videos that come
+# through are re-encoded so -a stays QuickTime-safe too.
+#   ig_gallery <url> <code> <slide-or-empty>
+# ---------------------------------------------------------------------------
+ig_gallery() {
+  local url="$1" code="$2" slide="$3"
+  local tmp; tmp="$(mktemp -d "${TMPDIR:-/tmp}/carabiner_gl_XXXXXX")"
+  local -a args=(--cookies-from-browser "$BROWSER" -D "$tmp" -q)
+  [ -n "$slide" ] && args+=(--range "$slide")
+
+  if ! gallery-dl "${args[@]}" "$url"; then
+    rm -rf "$tmp"
+    die "gallery-dl could not fetch this URL (private post? wrong browser cookies?)."
+  fi
+
+  local n=0 i=0 f ext base out
+  while IFS= read -r -d '' f; do
+    i=$((i+1))
+    ext="$(lower "${f##*.}")"
+    if [ -n "$slide" ]; then base="${code}_s${slide}"; else base="${code}_${i}"; fi
+    case "$ext" in
+      mp4|mov|webm|mkv|m4v)
+        out="$OUTDIR/${base}_fixed.mp4"
+        reencode "$f" "$out" 0 || { echo "✗ re-encode failed: $f" >&2; continue; }
+        ;;
+      *)
+        out="$OUTDIR/${base}.${ext}"
+        mv -f "$f" "$out"
+        ;;
+    esac
+    info "  ✓ ${out##*/}"
+    SAVED+=("${out##*/}")
+    n=$((n+1))
+  done < <(find "$tmp" -type f ! -name '*.json' -print0 | sort -z)
+
+  rm -rf "$tmp"
+  [ "$n" -gt 0 ] || die "gallery-dl downloaded nothing for this URL."
+}
+
+# ---------------------------------------------------------------------------
+# arg parsing
+# ---------------------------------------------------------------------------
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help)   usage ;;
+    -a|--all)    MODE="all"; shift ;;
+    -s|--slide)  MODE="slide"; SLIDE="${2:-}"; shift 2 ;;
+    --silent)    SILENT=1; shift ;;
+    -o|--out)    OUTDIR="${2:-}"; shift 2 ;;
+    -b|--browser) BROWSER="${2:-}"; shift 2 ;;
+    -*)          die "unknown option: $1 (try -h)" ;;
+    *)           URL="$1"; shift ;;
+  esac
+done
+
+URL="$(resolve_url "$URL")" || die "no URL. Pass one, or open the post in $BROWSER (or copy its link) and try again."
+[ -n "$SLIDE" ] || [ "$MODE" != "slide" ] || die "-s needs a slide number, e.g. -s 2"
+
+require yt-dlp
+require ffmpeg
+require gallery-dl
+
+mkdir -p "$OUTDIR" || die "cannot create output dir: $OUTDIR"
+
+# ---------------------------------------------------------------------------
+# dispatch
+# ---------------------------------------------------------------------------
+PLATFORM="$(platform "$URL")"
+info "carabiner → $PLATFORM  (cookies: $BROWSER, out: ${OUTDIR/#$HOME/~})"
+
+case "$PLATFORM" in
+  instagram)
+    CODE="$(ig_shortcode "$URL")"
+    [ -n "$CODE" ] || CODE="ig"     # fallback name if shortcode isn't in the URL
+
+    # A link often carries ?img_index=N (you pointed at a slide). In smart mode,
+    # if the post is actually a multi-slide carousel, ask before assuming.
+    if [ "$MODE" = "smart" ]; then
+      IDX="$(img_index "$URL")"
+      if [ -n "$IDX" ]; then
+        COUNT="$(ig_item_count "$URL")"
+        if [ "${COUNT:-1}" -gt 1 ]; then
+          info "  (carousel: $COUNT slides — asking…)"
+          case "$(ask_slide_or_all "$COUNT")" in
+            all)    MODE="all";                       info "  → grabbing all $COUNT slides" ;;
+            cancel) info "  cancelled."; exit 0 ;;
+            *)      MODE="slide"; SLIDE="$IDX";        info "  → grabbing slide $IDX only" ;;
+          esac
+        else
+          MODE="slide"; SLIDE="$IDX"; info "  (img_index=$IDX detected → slide $IDX)"
+        fi
+      fi
+    fi
+
+    case "$MODE" in
+      all)
+        ig_gallery "$URL" "$CODE" ""
+        ;;
+      slide)
+        # A slide can be video or image — try video, fall back to gallery-dl.
+        ig_video "$URL" "$CODE" "$SLIDE" "$SILENT"; rc=$?
+        [ "$rc" -eq 10 ] && ig_gallery "$URL" "$CODE" "$SLIDE"
+        [ "$rc" -eq 1 ] && die "download failed."
+        ;;
+      smart)
+        ig_video "$URL" "$CODE" "" "$SILENT"; rc=$?
+        [ "$rc" -eq 10 ] && ig_gallery "$URL" "$CODE" ""
+        [ "$rc" -eq 1 ] && die "download failed."
+        ;;
+    esac
+    ;;
+
+  youtube)
+    # Prefer QuickTime-friendly H.264/AAC; caps effectively at 1080p (4k is vp9/av1).
+    yt-dlp --cookies-from-browser "$BROWSER" \
+      -S "vcodec:h264,res,acodec:aac" --merge-output-format mp4 \
+      -o "$OUTDIR/%(id)s.%(ext)s" "$URL" || die "yt-dlp failed."
+    info "  ✓ saved to ${OUTDIR/#$HOME/~}"
+    SAVED+=("YouTube video")
+    ;;
+
+  pinterest)
+    # Public pins usually need no cookies; sending them is harmless.
+    yt-dlp --cookies-from-browser "$BROWSER" \
+      -o "$OUTDIR/pin_%(id)s.%(ext)s" "$URL" || die "yt-dlp failed."
+    info "  ✓ saved to ${OUTDIR/#$HOME/~}"
+    SAVED+=("Pinterest pin")
+    ;;
+
+  generic)
+    yt-dlp --cookies-from-browser "$BROWSER" \
+      -o "$OUTDIR/%(id)s.%(ext)s" "$URL" || die "yt-dlp failed (unsupported site?)."
+    info "  ✓ saved to ${OUTDIR/#$HOME/~}"
+    SAVED+=("Download")
+    ;;
+esac
+
+# Headless success → one tidy notification summarising what landed.
+if [ "${#SAVED[@]}" -gt 0 ]; then
+  if [ "${#SAVED[@]}" -eq 1 ]; then
+    notify "✓ Saved to Downloads" "${SAVED[0]}"
+  else
+    notify "✓ Saved ${#SAVED[@]} files" "${SAVED[0]}  (+$(( ${#SAVED[@]} - 1 )) more)"
+  fi
+fi
+info "Done."
