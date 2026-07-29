@@ -33,23 +33,33 @@ final class MenuBarController: NSObject {
     }
 
     @objc func grab() {
-        guard !busy else { return }
+        // Every outcome below is reported by notification, so if notifications are
+        // unavailable the app has no voice at all — a failed grab looks exactly like a
+        // dead hotkey. Log each outcome too, so the app stays diagnosable without it.
+        guard !busy else {
+            NSLog("Carabiner: grab ignored — a grab is already running")
+            return
+        }
         let url: String
         switch tabReader.resolve() {
         case .url(let u):
             url = u
         case .notAuthorized:
+            NSLog("Carabiner: grab aborted — not authorised to control %@", Self.browser.appName)
             notifier.show(GrabResult(ok: false, message: "Allow Carabiner to control \(Self.browser.appName) under System Settings → Privacy & Security → Automation, then try again"))
             return
         case .nothing:
+            NSLog("Carabiner: grab aborted — no URL in the front tab or the clipboard")
             notifier.show(GrabResult(ok: false, message: "No link in your browser tab or clipboard"))
             return
         }
+        NSLog("Carabiner: grabbing %@", url)
         busy = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = self.runner.run(url: url)
             DispatchQueue.main.async {
+                NSLog("Carabiner: grab %@ — %@", result.ok ? "succeeded" : "failed", result.message)
                 self.notifier.show(result)
                 self.busy = false
             }

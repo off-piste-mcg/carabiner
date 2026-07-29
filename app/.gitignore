@@ -2,7 +2,11 @@
 # single source of truth — hand edits to either are silently overwritten.
 Carabiner.xcodeproj/
 Carabiner/Info.plist
+# xcodegen leaves "Carabiner 2.xcodeproj" style copies behind if the original is in use
+Carabiner*.xcodeproj/
 build/
 .DS_Store
 DerivedData/
 *.xcuserstate
+# llvm coverage droppings from xcodebuild test
+*.profraw
