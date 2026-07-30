@@ -13,6 +13,10 @@ on:
         description: "gallery-dl version (e.g. 1.32.8)"
         required: true
         default: "1.32.8"
+      yt_dlp_version:
+        description: "yt-dlp version (e.g. 2026.07.04)"
+        required: true
+        default: "2026.07.04"
 
 # Read-only by default. The deferred release-publish step (not part of this
 # workflow yet) will need `contents: write` to attach assets to a release.
@@ -219,7 +223,15 @@ jobs:
           # gallery-dl loads its ~400 extractors by name at runtime, so PyInstaller's
           # static import scan misses all of them. --collect-submodules is mandatory:
           # without it the binary builds fine and then fails on every single URL.
-          pyinstaller --onefile --clean --name gallery-dl \
+          #
+          # --onedir, NOT --onefile. A one-file build re-extracts its whole embedded
+          # Python to a fresh temp dir on every launch: 4.4s per invocation against 0.09s
+          # for --onedir, measured. It also forces us to grant
+          # com.apple.security.cs.disable-library-validation, because the libraries it
+          # dlopens out of that temp dir aren't signed by us. --onedir leaves them as
+          # ordinary files we sign ourselves, so that entitlement goes away too.
+          # See docs/superpowers/spikes/2026-07-30-pyinstaller-onedir.md.
+          pyinstaller --onedir --clean --name gallery-dl \
             --target-arch universal2 \
             --collect-submodules gallery_dl \
             "$(python -c 'import gallery_dl, os; print(os.path.join(os.path.dirname(gallery_dl.__file__), "__main__.py"))')"
@@ -227,13 +239,28 @@ jobs:
       - name: Verify arch and that extractors actually loaded
         run: |
           set -euo pipefail
-          BIN=dist/gallery-dl
-          # Assert both slices are present — printing lipo -archs alone gates
-          # nothing (it exits 0 on a single-arch binary too).
-          ARCHS="$(lipo -archs "$BIN")"
-          echo "archs: $ARCHS"
-          echo "$ARCHS" | grep -qw arm64 && echo "$ARCHS" | grep -qw x86_64 \
-            || { echo "::error::expected a universal2 (arm64 + x86_64) binary, got: $ARCHS"; exit 1; }
+          BIN=dist/gallery-dl/gallery-dl
+          # EVERY Mach-O in the tree must be universal2, not just the launcher. A thin
+          # nested .so builds and runs perfectly on the runner and then dies on the other
+          # architecture — on a colleague's Intel Mac, which is the one place nobody is
+          # watching. Checking only the launcher would miss exactly that.
+          # The `while` runs in a subshell because it is on the right of a pipe, so a
+          # variable set inside it would be lost — the failure marker has to be a file.
+          rm -f /tmp/archfail
+          find dist/gallery-dl -type f | while read -r f; do
+            file -b "$f" | grep -q "Mach-O" || continue
+            A="$(lipo -archs "$f" 2>/dev/null || echo none)"
+            if echo "$A" | grep -qw arm64 && echo "$A" | grep -qw x86_64; then
+              echo "  ok   $A  ${f#dist/gallery-dl/}"
+            else
+              echo "::error::not universal2 ($A): ${f#dist/gallery-dl/}"; echo fail >> /tmp/archfail
+            fi
+          done
+          # `if`, not `[ … ] && exit 1`: under `set -e` the && form exits the step when the
+          # file is ABSENT, i.e. it fails the build precisely when everything was fine.
+          if [ -s /tmp/archfail ]; then
+            echo "::error::at least one nested Mach-O is not universal2"; exit 1
+          fi
           "$BIN" --version
           # The real smoke test: listing extractors proves --collect-submodules worked.
           # A stripped binary prints a handful; a good one prints hundreds.
@@ -256,10 +283,79 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
+          # `gallery-dl` is now a DIRECTORY (launcher + _internal), so the tarball carries
+          # a tree rather than a single file. fetch-deps.sh unpacks it to bin/_gallery-dl
+          # and drops a relative symlink next to it.
           tar -czf "gallery-dl-${{ inputs.gallery_dl_version }}-macos-universal.tar.gz" gallery-dl
           shasum -a 256 gallery-dl-*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: gallery-dl-universal
           path: dist/gallery-dl-*.tar.gz
+          if-no-files-found: error
+
+  # yt-dlp used to come straight from upstream's release, but upstream ships only a
+  # one-file `yt-dlp_macos` — there is no --onedir asset — and one-file is exactly the
+  # 7.9s-per-launch problem we are removing. So we build it ourselves, same shape as
+  # gallery-dl above.
+  yt-dlp:
+    runs-on: macos-15
+    steps:
+      # Same reasoning as the gallery-dl job: 3.12.10 is the newest patch that publishes
+      # a darwin build, and setup-python installs python.org's universal2 pkg, which is
+      # what makes --target-arch universal2 possible at all.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "pyinstaller==6.21.0"
+          python -m pip install "yt-dlp==${{ inputs.yt_dlp_version }}"
+          # yt-dlp resolves its ~1800 extractors lazily by name, exactly like gallery-dl,
+          # so the static import scan misses them and --collect-submodules is mandatory.
+          pyinstaller --onedir --clean --name yt-dlp \
+            --target-arch universal2 \
+            --collect-submodules yt_dlp \
+            "$(python -c 'import yt_dlp, os; print(os.path.join(os.path.dirname(yt_dlp.__file__), "__main__.py"))')"
+
+      - name: Verify arch and that extractors actually loaded
+        run: |
+          set -euo pipefail
+          BIN=dist/yt-dlp/yt-dlp
+          rm -f /tmp/archfail
+          find dist/yt-dlp -type f | while read -r f; do
+            file -b "$f" | grep -q "Mach-O" || continue
+            A="$(lipo -archs "$f" 2>/dev/null || echo none)"
+            if echo "$A" | grep -qw arm64 && echo "$A" | grep -qw x86_64; then
+              echo "  ok   $A  ${f#dist/yt-dlp/}"
+            else
+              echo "::error::not universal2 ($A): ${f#dist/yt-dlp/}"; echo fail >> /tmp/archfail
+            fi
+          done
+          if [ -s /tmp/archfail ]; then
+            echo "::error::at least one nested Mach-O is not universal2"; exit 1
+          fi
+          "$BIN" --version
+          # Same BrokenPipeError trap as the gallery-dl job: write once, then grep the
+          # file, never pipe the binary straight into `grep -q`.
+          "$BIN" --list-extractors > extractors.txt
+          n="$(grep -c . extractors.txt || true)"
+          echo "extractors: $n"
+          [ "$n" -gt 100 ] || { echo "::error::extractors missing — check --collect-submodules"; exit 1; }
+          grep -qi instagram extractors.txt \
+            || { echo "::error::instagram extractor missing"; exit 1; }
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd dist
+          tar -czf "yt-dlp-${{ inputs.yt_dlp_version }}-macos-universal.tar.gz" yt-dlp
+          shasum -a 256 yt-dlp-*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yt-dlp-universal
+          path: dist/yt-dlp-*.tar.gz
           if-no-files-found: error
