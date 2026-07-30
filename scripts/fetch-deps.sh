@@ -48,16 +48,34 @@ while read -r name url sha; do
     exit 1
   }
 
+  rm -rf "${DEST:?}/_$name" "$DEST/$name"
   case "$url" in
-    *.tar.gz) tar -xzf "$tmp/dl" -C "$tmp" && mv "$tmp/$name" "$DEST/$name" ;;
-    *)        mv "$tmp/dl" "$DEST/$name" ;;
+    *.tar.gz) tar -xzf "$tmp/dl" -C "$tmp" ;;
+    *)        mv "$tmp/dl" "$tmp/$name" ;;
   esac
-  chmod +x "$DEST/$name"
+
+  if [ -d "$tmp/$name" ]; then
+    # A PyInstaller --onedir tree: a launcher plus an _internal/ of libraries. It lands as
+    # bin/_<name>/ with a RELATIVE symlink bin/<name> beside it, so everything stays inside
+    # the one directory project.yml copies and CARABINER_BIN points at — no change to the
+    # bundle layout, GrabRunner, or the PATH contract. The launcher finds _internal from
+    # its own real path, so resolving through the symlink is fine.
+    mv "$tmp/$name" "$DEST/_$name"
+    chmod +x "$DEST/_$name/$name"
+    ln -s "_$name/$name" "$DEST/$name"
+  else
+    mv "$tmp/$name" "$DEST/$name"
+    chmod +x "$DEST/$name"
+  fi
+  # Hash the launcher itself (following the symlink) — it is the thing that must not
+  # change under us, and it is what the cache check re-reads next time.
   printf '%s  %s\n' "$sha" "$(sha_of "$DEST/$name")" > "$stamp"
 done < "$LOCK"
 
 echo
 echo "Bundled binaries in $DEST:"
 for b in yt-dlp ffmpeg gallery-dl; do
-  printf '  %-11s %s\n' "$b" "$(lipo -archs "$DEST/$b" 2>/dev/null || echo '(not a Mach-O)')"
+  kind="single file"
+  [ -L "$DEST/$b" ] && kind="onedir → $(readlink "$DEST/$b")"
+  printf '  %-11s %-24s %s\n' "$b" "$(lipo -archs "$DEST/$b" 2>/dev/null || echo '(not a Mach-O)')" "$kind"
 done

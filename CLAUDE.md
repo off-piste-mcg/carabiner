@@ -424,7 +424,18 @@ from the URL for "just this slide".
     re-stamps the bundle root in that window, and the build dies on detritus that had
     already been stripped once. Add new post-build scripts *above* the strip, never below.
 
-20. **PyInstaller binaries need `disable-library-validation` — on the binaries, not on the
+20. **RESOLVED 2026-07-30 — kept because the reasoning is what stops it coming back.**
+    Both Python tools are PyInstaller **`--onedir`** builds now, so every library they load
+    is an ordinary file we sign with our own team ID, library validation is satisfied, and
+    **no `disable-library-validation` entitlement exists anywhere in the project.** Do not
+    re-add it. If a bundled tool ever dies at startup with *"mapping process and mapped
+    file (non-platform) have different Team IDs"*, the cause is a Mach-O inside its tree
+    that the signing loop missed — find it (`codesign -dv` each file) rather than granting
+    the entitlement, which would paper over an unsigned library.
+
+    The original entry, which explains why the trap is subtle:
+
+    > **PyInstaller binaries need `disable-library-validation` — on the binaries, not on the
     app.** `yt-dlp_macos` and our `gallery-dl` are one-file PyInstaller builds: they unpack
     their own Python framework and `.so` files to a temp directory and `dlopen` them. Those
     libraries aren't signed by us, so once the launcher is re-signed with the Hardened
@@ -438,24 +449,27 @@ from the URL for "just this slide".
     and is passed via `--entitlements` when each binary is signed; the app itself does not
     carry it and shouldn't, since it never loads a foreign library.
 
-    Two smaller teeth on this one. A **double hyphen is illegal inside an XML comment**, so
-    documenting `--options runtime` in that entitlements file makes `codesign` fail with
-    `AMFIUnserializeXML: syntax error near line N` and no hint that it means XML. And the
-    build's post-signing smoke test checks **exit codes, not output**: `ffmpeg` wants
-    `-version` and exits 8 on `--version`, but prints its version banner first, so an
-    output-only check reads as a pass on a tool that just failed.
+    Two smaller teeth came off that work. One is now moot — there is no entitlements plist
+    any more — but worth knowing if you ever write one: a **double hyphen is illegal inside
+    an XML comment**, and documenting `--options runtime` in such a file makes `codesign`
+    fail with `AMFIUnserializeXML: syntax error near line N`, with no hint that it means
+    XML. The other is still live: the build's post-signing smoke test checks **exit codes,
+    not output**, because `ffmpeg` wants `-version`, exits 8 on `--version`, and prints its
+    version banner *before* failing — so an output-only check reads as a pass on a tool
+    that just broke.
 
 21. **Speed comes from not launching things, not from faster code — and the bundled
     binaries are the slow part.** Measured on this machine, worst case first:
-    - **PyInstaller one-file startup dominates everything.** `yt-dlp` takes **7.9s** and
-      `gallery-dl` **4.3s** just to reach `--version`, because each unpacks its whole
-      embedded Python framework to a temp dir on *every* launch. Homebrew's copies are
-      plain Python scripts against an installed interpreter: **0.19s** and **0.07s**. Our
-      code signature is not the cause — the ad-hoc CI binaries are identically slow
-      (7.89s vs 7.97s). So Phase 2's bundling made the app 20–40× slower to respond, and
-      the fix is `--onedir` PyInstaller builds in `build-deps.yml` (which would also let
-      us drop the entitlement in gotcha #20, since we'd sign every nested library). Until
-      that happens, bundling costs real responsiveness for portability.
+    - **PyInstaller one-file startup dominated everything — fixed 2026-07-30 by `--onedir`.**
+      The one-file builds took **7.9s** (`yt-dlp`) and **4.3s** (`gallery-dl`) just to reach
+      `--version`, because each unpacks its whole embedded Python framework to a fresh temp
+      dir on *every* launch. Our code signature was not the cause — the ad-hoc CI binaries
+      were identically slow (7.89s vs 7.97s), so this was never a signing problem to chase.
+      `--onedir` starts in **0.09s**, i.e. level with a plain Homebrew Python install
+      (0.07s), because there is nothing to unpack. `build-deps.yml` builds both tools that
+      way now, including yt-dlp, which we build ourselves since upstream ships only a
+      one-file asset. Keep it that way: reverting to `--onefile` would silently cost ~50×
+      startup *and* drag back the entitlement in gotcha #20.
     - **Re-encoding was unconditional.** A 45s reel that was *already* 8-bit yuv420p H.264
       cost 12.3s of libx264 to produce a slightly worse copy of itself. `plan_reencode`
       now probes with one `ffmpeg -i` (~0.05s) and stream-copies when the video is already

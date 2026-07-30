@@ -42,25 +42,44 @@ targets:
           set -euo pipefail
           BIN="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/bin"
           [ -d "$BIN" ] || { echo "note: no bundled binaries (run scripts/fetch-deps.sh)"; exit 0; }
-          for f in "$BIN"/*; do
-            [ -f "$f" ] || continue
-            # --options runtime on every Mach-O, or notarization rejects the whole app.
-            # --entitlements is not optional either: runtime turns on library validation,
-            # and the two PyInstaller tools dlopen their own unpacked Python framework,
-            # which we did not sign. Without the entitlement ON THE BINARY they die at
-            # startup. See BundledBinaries.entitlements for the full story.
+
+          # Walk the whole tree, not just the top level: the Python tools are PyInstaller
+          # --onedir trees (a launcher beside an _internal/ of dylibs and .so files), and
+          # every Mach-O in there needs the runtime flag or notarization rejects the app.
+          # Deepest-first, because signing a launcher seals what it links against — sign a
+          # nested library afterwards and you invalidate the launcher you just signed.
+          # -type f skips the bin/<name> symlinks: the target gets signed on its own, and
+          # codesign on a symlink would sign through it a second time.
+          find "$BIN" -type f -print0 \
+            | while IFS= read -r -d '' f; do
+                file -b "$f" | grep -q "Mach-O" || continue
+                printf '%s\t%s\n' "$(printf '%s' "$f" | tr -cd / | wc -c)" "$f"
+              done \
+            | sort -rn | cut -f2- > "$DERIVED_FILE_DIR/machos.txt"
+
+          while IFS= read -r f; do
+            # No --entitlements any more. --onedir means we sign every library the tool
+            # loads, so library validation is satisfied by them all carrying OUR team ID.
+            # The one-file builds this replaced had to dlopen an unpacked Python framework
+            # they'd extracted to /tmp, which we hadn't signed — that, and only that, is
+            # what needed com.apple.security.cs.disable-library-validation. See gotcha #20.
             codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
-              --options runtime --timestamp=none \
-              --entitlements "$PROJECT_DIR/BundledBinaries.entitlements" "$f"
+              --options runtime --timestamp=none "$f"
             codesign --verify --strict "$f"
-            # Signing a working tool into a broken one is silent — the build still
-            # succeeds and the app only fails at grab time, on a teammate's machine.
-            # Cheap smoke test here is worth more than a comment.
+          done < "$DERIVED_FILE_DIR/machos.txt"
+          echo "signed $(wc -l < "$DERIVED_FILE_DIR/machos.txt" | tr -d ' ') Mach-O files under Resources/bin"
+
+          # Signing a working tool into a broken one is silent — the build still succeeds
+          # and the app only fails at grab time, on a teammate's machine. This is the check
+          # that catches it, and it is worth more now than before: dropping the entitlement
+          # is exactly the kind of change that would show up here first.
+          for b in ffmpeg gallery-dl yt-dlp; do
+            [ -e "$BIN/$b" ] || continue
             # Both spellings: ffmpeg wants -version and exits non-zero on --version, the
-            # two Python tools want --version. Check the exit code, not the output —
-            # ffmpeg prints its version banner and *then* fails on an option it dislikes.
-            "$f" -version >/dev/null 2>&1 || "$f" --version >/dev/null 2>&1 \
-              || { echo "error: $(basename "$f") does not run after signing" >&2; exit 1; }
+            # Python tools want --version. Check the exit code, not the output — ffmpeg
+            # prints its version banner and *then* fails on an option it dislikes.
+            "$BIN/$b" -version >/dev/null 2>&1 || "$BIN/$b" --version >/dev/null 2>&1 \
+              || { echo "error: $b does not run after signing" >&2; exit 1; }
           done
       # This repo lives under ~/Documents, which is iCloud-synced, and the file provider
       # stamps com.apple.FinderInfo (plus com.apple.fileprovider.fpfs#P) onto the built
@@ -87,11 +106,13 @@ targets:
       path: Carabiner/Carabiner.entitlements
       properties:
         com.apple.security.automation.apple-events: true
-        # NOTE: com.apple.security.cs.disable-library-validation deliberately does NOT
-        # belong here. The bundled PyInstaller tools do need it, but they run as child
-        # processes governed by their own signatures — an entitlement on this app would
-        # not reach them and would only weaken the app that doesn't need it. It lives in
-        # BundledBinaries.entitlements, applied to those binaries when they are signed.
+        # NOTE: com.apple.security.cs.disable-library-validation is deliberately absent,
+        # from here AND from the bundled binaries. It was needed while those were
+        # PyInstaller one-file builds, which unpack a Python framework we hadn't signed
+        # and dlopen it. They are --onedir now, so every library they load is an ordinary
+        # file signed with our team ID and library validation is satisfied without
+        # weakening anything. See gotcha #20 — the reasoning is kept there precisely so
+        # nobody re-adds it "to be safe".
     info:
       path: Carabiner/Info.plist
       properties:
