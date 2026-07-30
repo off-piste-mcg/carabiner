@@ -1,0 +1,14 @@
+# One row per bundled binary: name  url  sha256
+#
+# yt-dlp is upstream's own universal2 build. ffmpeg and gallery-dl have no upstream macOS
+# binaries at all (see CLAUDE.md and the Phase 2 plan), so those come from this repo's own
+# .github/workflows/build-deps.yml, published as a release.
+#
+# Pin exact versions — "latest" would make builds unreproducible and let a bad upstream
+# release land in a signed, notarized app without anyone noticing.
+#
+# The ffmpeg and gallery-dl hashes are of the .tar.gz, verified before extraction. The
+# yt-dlp hash is of the bare binary and matches the `digest` GitHub reports for the asset.
+yt-dlp      https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_macos                                          498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b
+ffmpeg      https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07/ffmpeg-n7.1-macos-universal.tar.gz        def766e6c2f818892c99c37e1dd082c5750ffddb01597856e78f840b3112e497
+gallery-dl  https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07/gallery-dl-1.32.8-macos-universal.tar.gz  5d4045bab649ee7a26d2dec5b2d7829d483bc54071c1b5cb35de66812bcc3b16

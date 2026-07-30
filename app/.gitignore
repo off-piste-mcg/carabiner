@@ -6,6 +6,8 @@ Carabiner/Carabiner.entitlements
 # xcodegen leaves "Carabiner 2.xcodeproj" style copies behind if the original is in use
 Carabiner*.xcodeproj/
 build/
+# Third-party binaries pulled by scripts/fetch-deps.sh — ~150 MB, never committed.
+.deps/
 .DS_Store
 DerivedData/
 *.xcuserstate
