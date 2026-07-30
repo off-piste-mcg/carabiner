@@ -34,7 +34,17 @@ set -uo pipefail
 # the stripped-down PATH that macOS Shortcuts / Quick Actions / global hotkeys
 # hand a shell script — otherwise the tool can't find its deps when launched
 # from a hotkey, only from a normal terminal.
-export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+#
+# Bundled binaries win when the app supplies them; Homebrew stays the fallback so the
+# Shortcut and terminal paths are untouched. The order matters and is the whole point:
+# prepending Homebrew unconditionally (as this line used to) silently shadows the app's
+# private copies on any machine that also has Homebrew's yt-dlp — which is every machine
+# this gets tested on, so bundling would *look* like it worked. See gotcha #17.
+if [ -n "${CARABINER_BIN:-}" ]; then
+  export PATH="$CARABINER_BIN:/opt/homebrew/bin:/usr/local/bin:$PATH"
+else
+  export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+fi
 
 # Where this script actually lives, following the symlinks setup.sh drops in
 # Homebrew's bin — the carousel dialog's icon is a repo file, so `carabiner` has to
