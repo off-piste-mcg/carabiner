@@ -278,6 +278,23 @@ from the URL for "just this slide".
     meaning slide 1. The probe is skipped for `/reel/`, `/reels/` and `/tv/`, which are
     always a single video, so reels don't pay for a network round-trip they can't use.
 
+16. **Hardened Runtime silently kills the app's Apple Events — turn it on early, not at
+    release time.** Notarization requires the Hardened Runtime, and under it an app may
+    not *send* Apple Events without `com.apple.security.automation.apple-events`. That is
+    Carabiner's entire input path (reading the front browser tab, and the System Events
+    carousel dialog), so enabling it for the first time in a release build would mean the
+    first notarized DMG is the first run of the real thing. It is on in every build now,
+    with the entitlement declared in `app/project.yml`. `NSAppleEventsUsageDescription` is
+    only the *text* of the permission prompt — the entitlement is permission to ask.
+    Verify a build with:
+    ```bash
+    codesign -dv Carabiner.app 2>&1 | grep flags          # want flags=0x10000(runtime)
+    codesign -d --entitlements - --xml Carabiner.app | plutil -p -
+    ```
+    Note `com.apple.security.get-task-allow` in that output: Xcode adds it to **Debug**
+    builds only, and notarization **rejects** any binary carrying it. Notarize Release
+    builds, never a Debug one.
+
 ## Dependencies
 
 - `yt-dlp` — video (IG/YouTube/etc.)
