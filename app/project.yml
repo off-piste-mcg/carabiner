@@ -11,7 +11,13 @@ targets:
   Carabiner:
     type: application
     platform: macOS
-    sources: [Carabiner]
+    sources:
+      - Carabiner
+      - path: ../carabiner
+        buildPhase: resources
+      - path: ../assets
+        buildPhase: resources
+        type: folder
     dependencies:
       - package: KeyboardShortcuts
     postBuildScripts:
@@ -26,6 +32,15 @@ targets:
           if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then
             xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
           fi
+    # Hardened Runtime (below) blocks an app from sending Apple Events unless it says it
+    # needs to. Carabiner reads the front browser tab with AppleScript and drives the
+    # carousel dialog through System Events, so without this entitlement notarization
+    # would ship an app whose whole input path is dead. NSAppleEventsUsageDescription in
+    # the Info.plist is the *prompt text*; this is the permission to ask at all.
+    entitlements:
+      path: Carabiner/Carabiner.entitlements
+      properties:
+        com.apple.security.automation.apple-events: true
     info:
       path: Carabiner/Info.plist
       properties:
@@ -62,6 +77,12 @@ targets:
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "Apple Development"
         DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}
+        # Required for notarization, and enabled now rather than at release time: the
+        # Hardened Runtime changes what the app is *allowed to do* at runtime (Apple
+        # Events, JIT, library loading), so turning it on only in the release build would
+        # mean the first notarized DMG is the first time anyone runs the real thing.
+        # Every dev build now exercises the same restrictions the shipped app will.
+        ENABLE_HARDENED_RUNTIME: YES
   CarabinerTests:
     type: bundle.unit-test
     platform: macOS
@@ -74,3 +95,11 @@ targets:
         # codesign needs a plist. Nothing here needs a hand-written one — unlike the app,
         # this bundle is never launched, notified, or distributed — so let Xcode generate it.
         GENERATE_INFOPLIST_FILE: YES
+        # Must match the host app's signing identity/team. The test bundle is dlopen'd
+        # into the Carabiner.app process to run, and Hardened Runtime's library
+        # validation refuses to load code signed by a different team (or unsigned) into
+        # a hardened process — without this it fails with "different Team IDs" and no
+        # test ever runs, even though nothing about the test code itself is wrong.
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}

@@ -1,0 +1,245 @@
+name: build-deps
+
+# Manual only. These builds take ~30 minutes and the outputs are pinned in
+# scripts/deps.lock, so they should be deliberate, not on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: "ffmpeg release tag (e.g. n7.1)"
+        required: true
+        default: "n7.1"
+      gallery_dl_version:
+        description: "gallery-dl version (e.g. 1.32.8)"
+        required: true
+        default: "1.32.8"
+
+# Read-only by default. The deferred release-publish step (not part of this
+# workflow yet) will need `contents: write` to attach assets to a release.
+permissions:
+  contents: read
+
+jobs:
+  ffmpeg:
+    strategy:
+      matrix:
+        include:
+          # macos-13 (Intel) was fully retired 2025-12-08 — that leg would fail
+          # to schedule at all. macos-15-intel is the current Intel label.
+          - runner: macos-15-intel
+            arch: x86_64
+          # macos-14 entered deprecation 2026-07-06 and retires 2026-11-02
+          # (October brownouts hard-fail jobs on that label beforehand).
+          # macos-15 is the current Apple Silicon label.
+          - runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Build static x264
+        env:
+          # x264 is linked into ffmpeg, so it needs the same deployment-target
+          # floor as the ffmpeg build below (see that step for why).
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: |
+          set -euo pipefail
+          # x264 has no tagged releases, so pin an explicit commit — this
+          # artifact ends up inside a signed, notarized app and must not float
+          # with upstream's master branch. Resolved via `git ls-remote` against
+          # videolan/x264 master at the time this pin was written.
+          X264_COMMIT=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+          git init x264
+          cd x264
+          git remote add origin https://code.videolan.org/videolan/x264.git
+          git fetch --depth 1 origin "$X264_COMMIT"
+          git checkout FETCH_HEAD
+          ./configure --prefix="$HOME/ffbuild" --enable-static --disable-cli --disable-opencl
+          make -j"$(sysctl -n hw.ncpu)" && make install
+
+      - name: Build static ffmpeg
+        env:
+          # Neither build sets a deployment target, so clang defaults `minos`
+          # to the host OS (e.g. 15.0 on an arm64 macos-15 runner) — but the
+          # app's floor is 13.0 (app/project.yml deploymentTarget.macOS). Without
+          # this, a bundled ffmpeg would be a binary the dynamic loader refuses
+          # to run on macOS 13, and it can't reproduce on any of these runners.
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ inputs.ffmpeg_version }}" \
+            https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          cd ffmpeg
+          # --enable-gpl is required by libx264. The native `aac` encoder is built in, so
+          # `-c:a aac` needs no external library. Everything the script uses is
+          # -c:v libx264 -c:a aac -pix_fmt yuv420p, plus demuxing whatever IG serves.
+          PKG_CONFIG_PATH="$HOME/ffbuild/lib/pkgconfig" ./configure \
+            --prefix="$HOME/ffout" \
+            --enable-gpl --enable-libx264 \
+            --enable-static --disable-shared \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --pkg-config-flags=--static
+          make -j"$(sysctl -n hw.ncpu)" && make install
+
+      - name: Verify it is static and the right arch
+        run: |
+          set -euo pipefail
+          BIN="$HOME/ffout/bin/ffmpeg"
+          # A static build must not reference anything outside /usr/lib and
+          # /System/Library — a single Homebrew dylib here means the binary is
+          # unshippable, and the failure would only surface on a machine without brew.
+          #
+          # Run otool -L as its OWN command first, into a variable, rather than
+          # inside `if otool ... | grep ...`. Under set -euo pipefail, if otool
+          # itself fails (bad path, unreadable file, not a Mach-O), that failure
+          # inside the pipeline reads to the `if` as "grep found nothing" — the
+          # gate would PASS a binary it never actually inspected. Capturing the
+          # command on its own line means an otool failure fails the step outright.
+          OTOOL_OUT="$(otool -L "$BIN")"
+          NON_SYSTEM="$(echo "$OTOOL_OUT" | tail -n +2 | grep -vE '^\s+(/usr/lib|/System/Library)' || true)"
+          if [ -n "$NON_SYSTEM" ]; then
+            echo "::error::ffmpeg links non-system libraries"
+            echo "$NON_SYSTEM"
+            exit 1
+          fi
+          # This leg builds a single-arch slice (matrix.arch) — assert it is
+          # exactly that arch, not "universal", since printing lipo -archs
+          # without comparing it gates nothing (it exits 0 on any arch at all).
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "archs: $ARCHS"
+          [ "$ARCHS" = "${{ matrix.arch }}" ] \
+            || { echo "::error::expected a single ${{ matrix.arch }} slice, got: $ARCHS"; exit 1; }
+          # MACOSX_DEPLOYMENT_TARGET=13.0 is set on both build steps above, but
+          # nothing asserts it actually took effect. Without it, clang defaults
+          # `minos` to the host OS (e.g. 15.0 on a macos-15 runner) — a slice
+          # built against a higher minos is rejected by the dynamic loader on
+          # macOS 13, the app's declared floor (app/project.yml
+          # deploymentTarget.macOS), and that failure can't reproduce on any of
+          # these runners. This leg is single-arch, so one vtool block is the
+          # whole answer (a universal binary would need one check per slice).
+          # Write vtool's output to a file (not a live pipe) first: a failure
+          # in vtool itself then fails the step outright, and reading the
+          # result back from a file — rather than piping the command straight
+          # into grep/head — can't hit the EPIPE trap the gallery-dl job below
+          # documents (an early-exiting consumer killing a still-writing
+          # producer under pipefail).
+          vtool -show-build "$BIN" > vtool-build.txt
+          cat vtool-build.txt
+          # `|| true` on the assignment itself, not on the check below: under
+          # `set -euo pipefail`, if grep matches nothing the grep|awk pipeline exits
+          # non-zero and `set -e` kills the script right here, before the `[ -n "$MINOS" ]`
+          # guard below ever runs — so its "::error::" message is dead code, and a
+          # no-match failure would instead surface as a bare step failure with no
+          # diagnostic. `|| true` absorbs that non-zero status (MINOS still ends up
+          # empty when there's no match) so the guard below is reached and can report
+          # the real problem. It introduces no false pass: an empty $MINOS still fails
+          # the step via the guard, exactly as intended.
+          MINOS="$(grep -m1 '^[[:space:]]*minos ' vtool-build.txt | awk '{print $2}')" || true
+          [ -n "$MINOS" ] || { echo "::error::could not determine minos from vtool output"; exit 1; }
+          [ "$MINOS" = "13.0" ] \
+            || { echo "::error::expected minos 13.0 (MACOSX_DEPLOYMENT_TARGET), got: $MINOS"; exit 1; }
+          "$BIN" -version | head -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.arch }}
+          path: ~/ffout/bin/ffmpeg
+          if-no-files-found: error
+
+  ffmpeg-universal:
+    needs: ffmpeg
+    runs-on: macos-15
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ffmpeg-arm64, path: arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: ffmpeg-x86_64, path: x86_64 }
+      - name: lipo into a universal binary
+        run: |
+          set -euo pipefail
+          chmod +x arm64/ffmpeg x86_64/ffmpeg
+          lipo -create arm64/ffmpeg x86_64/ffmpeg -output ffmpeg
+          # Don't rely on the incidental protection that lipo -create errors on
+          # two same-arch inputs — assert the result explicitly contains both
+          # slices, since printing lipo -archs alone gates nothing.
+          ARCHS="$(lipo -archs ffmpeg)"
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -qw arm64 && echo "$ARCHS" | grep -qw x86_64 \
+            || { echo "::error::expected a universal (arm64 + x86_64) binary, got: $ARCHS"; exit 1; }
+          ./ffmpeg -version | head -1
+          tar -czf "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz" ffmpeg
+          shasum -a 256 "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-universal
+          path: ffmpeg-*.tar.gz
+          if-no-files-found: error
+
+  gallery-dl:
+    runs-on: macos-15
+    steps:
+      # For Python >= 3.11, actions/setup-python's macOS builds are not
+      # compiled from source per-arch — they install python.org's universal2
+      # pkg regardless of which `architecture` is requested, so `arm64` and no
+      # `architecture` resolve to the identical universal2 interpreter. That is
+      # what makes PyInstaller's --target-arch universal2 possible below.
+      # 3.12.11/.12/.13 publish no darwin build at all in actions/python-versions'
+      # manifest, so 3.12.10 is pinned as the newest usable patch.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.10"
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          # PyInstaller owns the bootloader and all universal2 arch handling
+          # for this artifact, which ends up inside a signed, notarized app —
+          # pin it explicitly rather than letting it float.
+          python -m pip install "pyinstaller==6.21.0"
+          python -m pip install "gallery-dl==${{ inputs.gallery_dl_version }}"
+          # gallery-dl loads its ~400 extractors by name at runtime, so PyInstaller's
+          # static import scan misses all of them. --collect-submodules is mandatory:
+          # without it the binary builds fine and then fails on every single URL.
+          pyinstaller --onefile --clean --name gallery-dl \
+            --target-arch universal2 \
+            --collect-submodules gallery_dl \
+            "$(python -c 'import gallery_dl, os; print(os.path.join(os.path.dirname(gallery_dl.__file__), "__main__.py"))')"
+
+      - name: Verify arch and that extractors actually loaded
+        run: |
+          set -euo pipefail
+          BIN=dist/gallery-dl
+          # Assert both slices are present — printing lipo -archs alone gates
+          # nothing (it exits 0 on a single-arch binary too).
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -qw arm64 && echo "$ARCHS" | grep -qw x86_64 \
+            || { echo "::error::expected a universal2 (arm64 + x86_64) binary, got: $ARCHS"; exit 1; }
+          "$BIN" --version
+          # The real smoke test: listing extractors proves --collect-submodules worked.
+          # A stripped binary prints a handful; a good one prints hundreds.
+          #
+          # Run --list-extractors ONCE into a file, then check both conditions
+          # against that file. Piping the binary's output straight into
+          # `grep -qi instagram` under `set -o pipefail` fails deterministically
+          # even on a CORRECT binary: grep exits at the first match, the
+          # producer gets EPIPE, CPython raises BrokenPipeError and exits 120,
+          # and pipefail turns that into a build failure that misdirects you
+          # toward --collect-submodules when the build already succeeded.
+          "$BIN" --list-extractors > extractors.txt
+          n="$(grep -c . extractors.txt || true)"
+          echo "extractors: $n"
+          [ "$n" -gt 100 ] || { echo "::error::extractors missing — check --collect-submodules"; exit 1; }
+          grep -qi instagram extractors.txt \
+            || { echo "::error::instagram extractor missing"; exit 1; }
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd dist
+          tar -czf "gallery-dl-${{ inputs.gallery_dl_version }}-macos-universal.tar.gz" gallery-dl
+          shasum -a 256 gallery-dl-*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gallery-dl-universal
+          path: dist/gallery-dl-*.tar.gz
+          if-no-files-found: error

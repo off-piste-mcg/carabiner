@@ -6,8 +6,11 @@ struct GrabResult {
 }
 
 struct GrabRunner {
-    /// Phase 1: the Homebrew-installed script. Phase 2 swaps this for the bundled copy.
-    var executable: String = "/opt/homebrew/bin/carabiner"
+    /// The bundled script when the app ships one, else the Homebrew-installed copy.
+    /// Phase 2 bundles it; the fallback keeps a dev build working before `fetch-deps.sh`
+    /// has ever run, so an unbundled build fails at the *dependency* check with a real
+    /// message instead of "couldn't launch carabiner".
+    var executable: String = GrabRunner.bundledExecutable() ?? "/opt/homebrew/bin/carabiner"
 
     /// Which browser's cookies the script should use. The script reads this from
     /// `CARABINER_BROWSER`, defaulting to chrome — and we hand it our whole environment,
@@ -16,6 +19,20 @@ struct GrabRunner {
     /// two sides in agreement, and is the seam Phase 2's browser picker needs.
     var browser: Browser = .chrome
 
+    /// The app's private binaries. `nil` when this build has no bundled copies, in which
+    /// case CARABINER_BIN is left unset entirely and the script uses Homebrew.
+    var binDirectory: String? = GrabRunner.binDirectory()
+
+    static func bundledExecutable() -> String? {
+        Bundle.main.url(forResource: "carabiner", withExtension: nil)?.path
+    }
+
+    static func binDirectory() -> String? {
+        guard let res = Bundle.main.resourceURL?.appendingPathComponent("bin").path,
+              FileManager.default.fileExists(atPath: res) else { return nil }
+        return res
+    }
+
     func run(url: String) -> GrabResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: executable)
@@ -23,6 +40,10 @@ struct GrabRunner {
         var env = ProcessInfo.processInfo.environment
         env["CARABINER_NO_NOTIFY"] = "1"          // the app owns notifications
         env["CARABINER_BROWSER"] = browser.rawValue
+        // Only set it when we actually have one: an empty CARABINER_BIN would put an
+        // empty entry at the front of the script's PATH, which means the current
+        // directory. See test above.
+        if let binDirectory { env["CARABINER_BIN"] = binDirectory }
         proc.environment = env
 
         let outPipe = Pipe(), errPipe = Pipe()

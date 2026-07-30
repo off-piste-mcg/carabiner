@@ -2,6 +2,7 @@
 # single source of truth — hand edits to either are silently overwritten.
 Carabiner.xcodeproj/
 Carabiner/Info.plist
+Carabiner/Carabiner.entitlements
 # xcodegen leaves "Carabiner 2.xcodeproj" style copies behind if the original is in use
 Carabiner*.xcodeproj/
 build/

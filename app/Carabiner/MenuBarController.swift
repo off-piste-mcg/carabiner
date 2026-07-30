@@ -14,11 +14,18 @@ final class MenuBarController: NSObject {
     override init() {
         super.init()
         if let button = statusItem.button {
-            button.image = NSImage(named: "AppIcon")
-            button.image?.size = NSSize(width: 18, height: 18)
-            // Not a template image: templates render as a flat monochrome silhouette,
-            // which would throw away the full-colour OFF-PISTE logo.
-            button.image?.isTemplate = false
+            // Vector asset cropped to the mark's own bounds (496:388), so height sets the
+            // size and width follows the aspect — 18pt would overflow a 22pt menu bar.
+            let icon = NSImage(named: "StatusIcon")
+            icon?.size = NSSize(width: 20.5, height: 16)
+            // Template, unlike the full-colour AppIcon this replaced: the mark is a single
+            // silhouette, so AppKit tints it to match the menu bar (dark on light, light on
+            // dark) instead of it vanishing into a light bar. Notifications are unaffected —
+            // UNUserNotificationCenter takes their icon from the bundle's AppIcon.
+            icon?.isTemplate = true
+            button.image = icon
+            // A missing asset would leave a blank, unexplained gap in the menu bar, so say so.
+            if icon == nil { NSLog("Carabiner: StatusIcon asset missing — status item has no image") }
         }
         let menu = NSMenu()
         let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab), keyEquivalent: "")
