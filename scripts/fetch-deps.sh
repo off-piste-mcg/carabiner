@@ -7,8 +7,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 DEST="$HERE/../app/.deps/bin"
 LOCK="$HERE/deps.lock"
+# Deliberately a sibling of DEST, not inside it: app/project.yml copies .deps/bin into the
+# bundle as a folder reference, so anything sitting in there ships inside the signed app.
+# Only the binaries themselves belong in DEST.
+STAMPS="$HERE/../app/.deps/stamps"
 
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$STAMPS"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 sha_of() { shasum -a 256 "$1" | cut -d' ' -f1; }
@@ -23,7 +27,7 @@ while read -r name url sha; do
   #   <hash of the downloaded artifact>  <hash of the installed binary>
   # A cache hit needs both to agree — the first catches a changed lock entry, the second
   # catches a tampered-with cached binary.
-  stamp="$DEST/.$name.sha256"
+  stamp="$STAMPS/$name.sha256"
   if [ -f "$DEST/$name" ] && [ -f "$stamp" ]; then
     read -r stamped_src stamped_bin < "$stamp" || true
     if [ "${stamped_src:-}" = "$sha" ] && [ "${stamped_bin:-}" = "$(sha_of "$DEST/$name")" ]; then

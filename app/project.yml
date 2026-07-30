@@ -18,14 +18,60 @@ targets:
       - path: ../assets
         buildPhase: resources
         type: folder
+      # Populated by scripts/fetch-deps.sh, and gitignored — a build without it simply has
+      # no Contents/Resources/bin, which GrabRunner.binDirectory() reports as nil so the
+      # script falls back to Homebrew. `type: folder` is load-bearing: it makes this a
+      # folder reference that copies the directory itself, so the binaries land in
+      # Resources/bin/. Listed as a plain group they would be copied loose into Resources/
+      # and binDirectory() would never find them.
+      - path: .deps/bin
+        buildPhase: resources
+        type: folder
     dependencies:
       - package: KeyboardShortcuts
+    # Order matters here, and it is not the obvious one. Both scripts run before Xcode's
+    # own CodeSign step, but the xattr strip must be LAST — see its comment.
     postBuildScripts:
+      # Xcode only auto-signs nested code in Frameworks/, PlugIns/ and XPCServices/.
+      # Anything under Resources/ is sealed as data and left unsigned, which notarization
+      # rejects outright. So the bundled binaries have to be signed by hand, here, before
+      # Xcode seals the bundle around them.
+      - name: Sign bundled binaries with Hardened Runtime
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          BIN="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/bin"
+          [ -d "$BIN" ] || { echo "note: no bundled binaries (run scripts/fetch-deps.sh)"; exit 0; }
+          for f in "$BIN"/*; do
+            [ -f "$f" ] || continue
+            # --options runtime on every Mach-O, or notarization rejects the whole app.
+            # --entitlements is not optional either: runtime turns on library validation,
+            # and the two PyInstaller tools dlopen their own unpacked Python framework,
+            # which we did not sign. Without the entitlement ON THE BINARY they die at
+            # startup. See BundledBinaries.entitlements for the full story.
+            codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
+              --options runtime --timestamp=none \
+              --entitlements "$PROJECT_DIR/BundledBinaries.entitlements" "$f"
+            codesign --verify --strict "$f"
+            # Signing a working tool into a broken one is silent — the build still
+            # succeeds and the app only fails at grab time, on a teammate's machine.
+            # Cheap smoke test here is worth more than a comment.
+            # Both spellings: ffmpeg wants -version and exits non-zero on --version, the
+            # two Python tools want --version. Check the exit code, not the output —
+            # ffmpeg prints its version banner and *then* fails on an option it dislikes.
+            "$f" -version >/dev/null 2>&1 || "$f" --version >/dev/null 2>&1 \
+              || { echo "error: $(basename "$f") does not run after signing" >&2; exit 1; }
+          done
       # This repo lives under ~/Documents, which is iCloud-synced, and the file provider
       # stamps com.apple.FinderInfo (plus com.apple.fileprovider.fpfs#P) onto the built
       # bundle. codesign refuses those outright — "resource fork, Finder information, or
-      # similar detritus not allowed" — so an in-build signature fails. postBuildScripts
-      # run before Xcode's CodeSign step, which makes this the right place to strip them.
+      # similar detritus not allowed" — so an in-build signature fails.
+      #
+      # This must be the LAST post-build script. It used to be the first, which was fine
+      # while it was the only one: nothing ran between it and CodeSign. Signing ~90 MB of
+      # bundled binaries takes long enough that the file provider re-stamps the bundle root
+      # in that window, and the build fails on detritus that had already been stripped once.
+      # Keep this immediately before CodeSign; add new scripts above it, never below.
       - name: Strip iCloud xattrs before signing
         basedOnDependencyAnalysis: false
         script: |
@@ -41,6 +87,11 @@ targets:
       path: Carabiner/Carabiner.entitlements
       properties:
         com.apple.security.automation.apple-events: true
+        # NOTE: com.apple.security.cs.disable-library-validation deliberately does NOT
+        # belong here. The bundled PyInstaller tools do need it, but they run as child
+        # processes governed by their own signatures — an entitlement on this app would
+        # not reach them and would only weaken the app that doesn't need it. It lives in
+        # BundledBinaries.entitlements, applied to those binaries when they are signed.
     info:
       path: Carabiner/Info.plist
       properties:
