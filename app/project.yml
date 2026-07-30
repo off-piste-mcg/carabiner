@@ -68,3 +68,9 @@ targets:
     sources: [CarabinerTests]
     dependencies:
       - target: Carabiner
+    settings:
+      base:
+        # Signing the app target (see above) makes this bundle get signed too, and
+        # codesign needs a plist. Nothing here needs a hand-written one — unlike the app,
+        # this bundle is never launched, notified, or distributed — so let Xcode generate it.
+        GENERATE_INFOPLIST_FILE: YES
