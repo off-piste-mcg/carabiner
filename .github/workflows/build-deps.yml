@@ -9,6 +9,10 @@ on:
         description: "ffmpeg release tag (e.g. n7.1)"
         required: true
         default: "n7.1"
+      gallery_dl_version:
+        description: "gallery-dl version (e.g. 1.32.8)"
+        required: true
+        default: "1.32.8"
 
 jobs:
   ffmpeg:
@@ -85,3 +89,51 @@ jobs:
         with:
           name: ffmpeg-universal
           path: ffmpeg-*.tar.gz
+
+  gallery-dl:
+    runs-on: macos-14
+    steps:
+      # python.org ships a universal2 framework build; the runner's default Python is
+      # single-arch, and PyInstaller can only emit universal2 from a universal2 Python.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"   # the macOS setup-python builds are universal2 framework builds
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip pyinstaller
+          python -m pip install "gallery-dl==${{ inputs.gallery_dl_version }}"
+          # gallery-dl loads its ~400 extractors by name at runtime, so PyInstaller's
+          # static import scan misses all of them. --collect-submodules is mandatory:
+          # without it the binary builds fine and then fails on every single URL.
+          pyinstaller --onefile --clean --name gallery-dl \
+            --target-arch universal2 \
+            --collect-submodules gallery_dl \
+            "$(python -c 'import gallery_dl, os; print(os.path.join(os.path.dirname(gallery_dl.__file__), "__main__.py"))')"
+
+      - name: Verify arch and that extractors actually loaded
+        run: |
+          set -euo pipefail
+          BIN=dist/gallery-dl
+          lipo -archs "$BIN"           # expect: x86_64 arm64
+          "$BIN" --version
+          # The real smoke test: listing extractors proves --collect-submodules worked.
+          # A stripped binary prints a handful; a good one prints hundreds.
+          n="$("$BIN" --list-extractors | grep -c . || true)"
+          echo "extractors: $n"
+          [ "$n" -gt 100 ] || { echo "::error::extractors missing — check --collect-submodules"; exit 1; }
+          "$BIN" --list-extractors | grep -qi instagram \
+            || { echo "::error::instagram extractor missing"; exit 1; }
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd dist
+          tar -czf "gallery-dl-${{ inputs.gallery_dl_version }}-macos-universal.tar.gz" gallery-dl
+          shasum -a 256 gallery-dl-*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gallery-dl-universal
+          path: dist/gallery-dl-*.tar.gz
