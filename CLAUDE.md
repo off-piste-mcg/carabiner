@@ -267,6 +267,17 @@ from the URL for "just this slide".
     exactly like a broken app. The app now logs the chord it registered and every fire.
     Only one thing can own a chord: if the app has the hotkey, unbind the Shortcut's.
 
+15. **`img_index` is absent on slide 1 — never use it to detect a carousel.** Instagram
+    adds `?img_index=N` to the URL only once you navigate *off* the first slide, so a
+    carousel you have just opened is indistinguishable from a single post by URL alone.
+    The carousel prompt used to be gated on `img_index` being present, which meant
+    opening a carousel and firing the hotkey straight away skipped the question entirely
+    and silently grabbed all twelve slides — and it looked like the prompt was broken,
+    because on any post you *had* scrolled it worked fine. Detection is now
+    `ig_item_count` (a `gallery-dl -g` probe) on `/p/` URLs, with no `img_index` simply
+    meaning slide 1. The probe is skipped for `/reel/`, `/reels/` and `/tv/`, which are
+    always a single video, so reels don't pay for a network round-trip they can't use.
+
 ## Dependencies
 
 - `yt-dlp` — video (IG/YouTube/etc.)

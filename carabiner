@@ -319,22 +319,28 @@ case "$PLATFORM" in
     CODE="$(ig_shortcode "$URL")"
     [ -n "$CODE" ] || CODE="ig"     # fallback name if shortcode isn't in the URL
 
-    # A link often carries ?img_index=N (you pointed at a slide). In smart mode,
-    # if the post is actually a multi-slide carousel, ask before assuming.
+    # A link may carry ?img_index=N (you navigated to a slide). In smart mode, ask
+    # whenever the post turns out to be a multi-slide carousel.
+    #
+    # Do NOT gate this on img_index: Instagram only adds that param once you move off
+    # the first slide, so a carousel you just opened looks exactly like a single post
+    # and the prompt never appeared — it silently grabbed the whole set instead.
+    # No img_index simply means you're on slide 1.
     if [ "$MODE" = "smart" ]; then
       IDX="$(img_index "$URL")"
-      if [ -n "$IDX" ]; then
-        COUNT="$(ig_item_count "$URL")"
-        if [ "${COUNT:-1}" -gt 1 ]; then
-          info "  (carousel: $COUNT slides — asking…)"
-          case "$(ask_slide_or_all "$COUNT")" in
-            all)    MODE="all";                       info "  → grabbing all $COUNT slides" ;;
-            cancel) info "  cancelled."; exit 0 ;;
-            *)      MODE="slide"; SLIDE="$IDX";        info "  → grabbing slide $IDX only" ;;
-          esac
-        else
-          MODE="slide"; SLIDE="$IDX"; info "  (img_index=$IDX detected → slide $IDX)"
-        fi
+      # Only /p/ posts can be carousels — /reel/, /reels/ and /tv/ are always one
+      # video — so reels don't pay for the gallery-dl probe ig_item_count costs.
+      COUNT=1
+      case "$URL" in */p/*) COUNT="$(ig_item_count "$URL")" ;; esac
+      if [ "${COUNT:-1}" -gt 1 ]; then
+        info "  (carousel: $COUNT slides — asking…)"
+        case "$(ask_slide_or_all "$COUNT")" in
+          all)    MODE="all";                            info "  → grabbing all $COUNT slides" ;;
+          cancel) info "  cancelled."; exit 0 ;;
+          *)      MODE="slide"; SLIDE="${IDX:-1}";       info "  → grabbing slide ${IDX:-1} only" ;;
+        esac
+      elif [ -n "$IDX" ]; then
+        MODE="slide"; SLIDE="$IDX"; info "  (img_index=$IDX detected → slide $IDX)"
       fi
     fi
 
