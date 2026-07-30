@@ -1,0 +1,87 @@
+name: build-deps
+
+# Manual only. These builds take ~30 minutes and the outputs are pinned in
+# scripts/deps.lock, so they should be deliberate, not on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_version:
+        description: "ffmpeg release tag (e.g. n7.1)"
+        required: true
+        default: "n7.1"
+
+jobs:
+  ffmpeg:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-14   # Apple Silicon
+            arch: arm64
+          - runner: macos-13   # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Build static x264
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          cd x264
+          ./configure --prefix="$HOME/ffbuild" --enable-static --disable-cli --disable-opencl
+          make -j"$(sysctl -n hw.ncpu)" && make install
+
+      - name: Build static ffmpeg
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ inputs.ffmpeg_version }}" \
+            https://github.com/FFmpeg/FFmpeg.git ffmpeg
+          cd ffmpeg
+          # --enable-gpl is required by libx264. The native `aac` encoder is built in, so
+          # `-c:a aac` needs no external library. Everything the script uses is
+          # -c:v libx264 -c:a aac -pix_fmt yuv420p, plus demuxing whatever IG serves.
+          PKG_CONFIG_PATH="$HOME/ffbuild/lib/pkgconfig" ./configure \
+            --prefix="$HOME/ffout" \
+            --enable-gpl --enable-libx264 \
+            --enable-static --disable-shared \
+            --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
+            --pkg-config-flags=--static
+          make -j"$(sysctl -n hw.ncpu)" && make install
+
+      - name: Verify it is static and the right arch
+        run: |
+          set -euo pipefail
+          BIN="$HOME/ffout/bin/ffmpeg"
+          # A static build must not reference anything outside /usr/lib and
+          # /System/Library — a single Homebrew dylib here means the binary is
+          # unshippable, and the failure would only surface on a machine without brew.
+          if otool -L "$BIN" | tail -n +2 | grep -vE '^\s+(/usr/lib|/System/Library)'; then
+            echo "::error::ffmpeg links non-system libraries"; exit 1
+          fi
+          lipo -archs "$BIN"
+          "$BIN" -version | head -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-${{ matrix.arch }}
+          path: ~/ffout/bin/ffmpeg
+
+  ffmpeg-universal:
+    needs: ffmpeg
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: ffmpeg-arm64, path: arm64 }
+      - uses: actions/download-artifact@v4
+        with: { name: ffmpeg-x86_64, path: x86_64 }
+      - name: lipo into a universal binary
+        run: |
+          set -euo pipefail
+          chmod +x arm64/ffmpeg x86_64/ffmpeg
+          lipo -create arm64/ffmpeg x86_64/ffmpeg -output ffmpeg
+          lipo -archs ffmpeg   # expect: x86_64 arm64
+          ./ffmpeg -version | head -1
+          tar -czf "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz" ffmpeg
+          shasum -a 256 "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-universal
+          path: ffmpeg-*.tar.gz
