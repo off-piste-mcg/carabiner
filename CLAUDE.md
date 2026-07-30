@@ -343,6 +343,18 @@ from the URL for "just this slide".
     meaning slide 1. The probe is skipped for `/reel/`, `/reels/` and `/tv/`, which are
     always a single video, so reels don't pay for a network round-trip they can't use.
 
+    **The same symptom came back by a second route (fixed 2026-07-30).** `gallery-dl -g`
+    does not print one uniform line per slide: an image slide is a plain URL, but a
+    **video** slide is prefixed `ytdl:` and is followed by an indented `| ` continuation
+    line. `ig_item_count` matched only `^https?://`, so it counted zero video slides — a
+    two-slide video+image carousel counted as **1**, the prompt never fired, and the tool
+    silently grabbed the whole set, which is exactly the failure above. It is invisible on
+    all-image carousels because those count correctly, so it survives any test that
+    doesn't use a mixed post. The pattern is now `^(ytdl:)?https?://`, still anchored so
+    the `| ` continuation line isn't double-counted. Lesson worth keeping: test carousel
+    changes against a post that actually mixes video and images — both posts on the
+    OFF-PISTE account do, which is how this surfaced.
+
 16. **Hardened Runtime silently kills the app's Apple Events — turn it on early, not at
     release time.** Notarization requires the Hardened Runtime, and under it an app may
     not *send* Apple Events without `com.apple.security.automation.apple-events`. That is
