@@ -123,7 +123,16 @@ jobs:
           # producer under pipefail).
           vtool -show-build "$BIN" > vtool-build.txt
           cat vtool-build.txt
-          MINOS="$(grep -m1 '^[[:space:]]*minos ' vtool-build.txt | awk '{print $2}')"
+          # `|| true` on the assignment itself, not on the check below: under
+          # `set -euo pipefail`, if grep matches nothing the grep|awk pipeline exits
+          # non-zero and `set -e` kills the script right here, before the `[ -n "$MINOS" ]`
+          # guard below ever runs — so its "::error::" message is dead code, and a
+          # no-match failure would instead surface as a bare step failure with no
+          # diagnostic. `|| true` absorbs that non-zero status (MINOS still ends up
+          # empty when there's no match) so the guard below is reached and can report
+          # the real problem. It introduces no false pass: an empty $MINOS still fails
+          # the step via the guard, exactly as intended.
+          MINOS="$(grep -m1 '^[[:space:]]*minos ' vtool-build.txt | awk '{print $2}')" || true
           [ -n "$MINOS" ] || { echo "::error::could not determine minos from vtool output"; exit 1; }
           [ "$MINOS" = "13.0" ] \
             || { echo "::error::expected minos 13.0 (MACOSX_DEPLOYMENT_TARGET), got: $MINOS"; exit 1; }
