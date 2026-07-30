@@ -248,9 +248,11 @@ plan_reencode() {
     fi
     # Cheap here and it means the file starts playing before it has fully loaded.
     REENC_ARGS+=(-movflags +faststart)
+    info "  (already QuickTime-safe → remuxing, no re-encode)"
   else
     REENC_ARGS=(-c:v libx264 -pix_fmt yuv420p)
     if [ "$silent" -eq 1 ]; then REENC_ARGS+=(-an); else REENC_ARGS+=(-c:a aac); fi
+    info "  (re-encoding to 8-bit yuv420p H.264 — this is the slow path)"
   fi
 }
 
