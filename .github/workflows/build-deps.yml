@@ -22,6 +22,10 @@ permissions:
 jobs:
   ffmpeg:
     strategy:
+      # Let both architectures report. With fail-fast on, one leg failing cancels
+      # the other mid-build, so you learn about one arch's problem per ~25-minute
+      # run instead of both at once.
+      fail-fast: false
       matrix:
         include:
           # macos-13 (Intel) was fully retired 2025-12-08 — that leg would fail
@@ -78,12 +82,21 @@ jobs:
           # --enable-gpl is required by libx264. The native `aac` encoder is built in, so
           # `-c:a aac` needs no external library. Everything the script uses is
           # -c:v libx264 -c:a aac -pix_fmt yuv420p, plus demuxing whatever IG serves.
+          # --disable-autodetect is load-bearing, not tidiness. Without it configure
+          # scans the host and links whatever it finds: the runners carry Homebrew's
+          # X11 stack, so ffmpeg pulled in libxcb/libX11/libXau/libXdmcp for the xcb
+          # screen-grab devices we never use, and the static-link gate below caught a
+          # binary that would have died on any Mac without those dylibs. Autodetect
+          # off means only what we ask for gets linked, on any runner, forever.
+          # zlib is re-enabled explicitly: it lives in /usr/lib, so it is a system
+          # library the gate allows, and some demuxers need it.
           PKG_CONFIG_PATH="$HOME/ffbuild/lib/pkgconfig" ./configure \
             --prefix="$HOME/ffout" \
             --enable-gpl --enable-libx264 \
             --enable-static --disable-shared \
             --disable-doc --disable-debug --disable-ffplay --disable-ffprobe \
-            --pkg-config-flags=--static
+            --pkg-config-flags=--static \
+            --disable-autodetect --enable-zlib
           make -j"$(sysctl -n hw.ncpu)" && make install
 
       - name: Verify it is static and the right arch
