@@ -36,6 +36,20 @@ set -uo pipefail
 # from a hotkey, only from a normal terminal.
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
+# Where this script actually lives, following the symlinks setup.sh drops in
+# Homebrew's bin — the carousel dialog's icon is a repo file, so `carabiner` has to
+# find its own clone rather than trust $PWD or the symlink's directory.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  target="$(readlink "$self")"
+  case "$target" in
+    /*) self="$target" ;;
+    *)  self="$(cd "$(dirname "$self")" && pwd)/$target" ;;
+  esac
+done
+HERE="$(cd "$(dirname "$self")" && pwd)"
+DIALOG_ICON="$HERE/assets/Carabiner.icns"
+
 BROWSER="${CARABINER_BROWSER:-chrome}"
 OUTDIR="$HOME/Downloads"
 MODE="smart"        # smart | all | slide
@@ -145,11 +159,22 @@ ask_slide_or_all() {
     return 0
   fi
 
+  # Branded icon when the repo's .icns is reachable, the generic note icon when it
+  # isn't (a stray copy of the script, or a clone missing assets/) — the prompt has to
+  # keep working either way. `POSIX file` is resolved outside the System Events tell
+  # block so it's AppleScript resolving the path, not the app.
+  local icon_clause="with icon note" icon_setup=""
+  if [ -f "$DIALOG_ICON" ]; then
+    icon_setup="set iconRef to POSIX file \"${DIALOG_ICON//\"/\\\"}\""
+    icon_clause="with icon iconRef"
+  fi
+
   local b
   b="$(osascript 2>/dev/null <<EOF
+$icon_setup
 tell application "System Events"
   activate
-  set r to button returned of (display dialog "This Instagram post is a carousel with $count slides.\n\nGrab just the slide you're on, or the whole carousel?" buttons {"Cancel", "This slide", "All $count"} default button "All $count" with title "Carabiner" with icon note)
+  set r to button returned of (display dialog "This Instagram post is a carousel with $count slides.\n\nGrab just the slide you're on, or the whole carousel?" buttons {"Cancel", "This slide", "All $count"} default button "All $count" with title "Carabiner" $icon_clause)
 end tell
 return r
 EOF

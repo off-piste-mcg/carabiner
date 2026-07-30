@@ -62,7 +62,11 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   The shortcut's Run Shell Script uses a portable one-liner so it finds `carabiner` on
   both Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`).
 - **`app/`** — **`Carabiner.app`, the native Swift/AppKit menu-bar app (Phase 1 done).**
-  Menu-bar only (`LSUIElement`), OFF-PISTE logo status item, global ⌃⌥⌘V hotkey. Reads the
+  Menu-bar only (`LSUIElement`), OFF-PISTE logo status item, global ⌃⌥⌘V hotkey. The status
+  item and the notification use *different* assets: the menu bar draws the `StatusIcon`
+  vector asset (the SVG, template-rendered so macOS tints it to the bar), while the branded
+  notification keeps the full-colour `AppIcon` — `UNUserNotificationCenter` always takes its
+  icon from the bundle icon, so the two never need to match. Reads the
   front browser tab via AppleScript, shells out to this repo's `carabiner` script, and
   posts a **branded** notification with the filename (or "N files"). Swift owns the
   experience; bash still owns the grabbing — the app never re-implements the pipeline.
@@ -198,6 +202,15 @@ from the URL for "just this slide".
    (or break) depending on what they have installed. The native `osascript` dialog is
    the only option that's zero-dependency and identical on every Mac. Consistency won
    over polish — a deliberate decision, not a missing feature.
+
+   **Partly superseded (2026-07-30).** The objection was to branded dialog *engines*, not
+   to branding as such. `display dialog … with icon` takes a plain `.icns`, so the prompt
+   now carries the OFF-PISTE logo from `assets/Carabiner.icns` — no cask, no per-machine
+   Xcode build, identical on every Mac, and it brands the Shortcut's prompt too. The
+   dialog itself is still the stock native one and should stay that way. Because the icon
+   is a repo file, `carabiner` resolves its own real directory (following the symlinks
+   `setup.sh` drops in Homebrew's bin) rather than trusting `$PWD`; if the file is
+   missing the prompt falls back to `with icon note` instead of failing.
 10. **Notifications are a plain native banner — a custom logo icon isn't worth it.**
     `osascript display notification` reliably banners but is attributed to Script Editor
     (generic icon), and that icon can't be changed. We built the obvious fix — a
