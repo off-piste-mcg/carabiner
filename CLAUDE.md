@@ -204,15 +204,19 @@ the fact). Phase 2, bundling the binaries, is **partially done**:
   were earned the hard way here). A build with no `.deps/bin` still works: there is simply
   no `Resources/bin`, `GrabRunner.binDirectory()` returns nil, `CARABINER_BIN` stays unset
   and the script falls back to Homebrew exactly as before.
-- **Outstanding (task 7):** the no-Homebrew verification is **half done**. With
-  `brew unlink yt-dlp ffmpeg gallery-dl` in force, the bundled copies were confirmed to be
-  the ones that resolve, and a real 10-bit → `yuv420p` re-encode ran through the bundled
-  ffmpeg. What has **not** been done is an end-to-end grab of an actual Instagram post
-  through the app's hotkey with Homebrew unlinked — that needs a real URL and live
-  cookies, and it is the only thing that exercises the network path. Until that runs,
-  treat bundling as "resolves correctly" rather than "shipped and proven". Also still
-  open: README install instructions for app users (plan task 7 step 5), which are better
-  written once the DMG exists.
+- **Done (task 7, 2026-07-30):** verified with `brew unlink yt-dlp ffmpeg gallery-dl` in
+  force, so nothing could silently fall back. A real Instagram post was grabbed
+  end-to-end through the app's own bundled binaries, re-encoded (well — remuxed), landed
+  in `~/Downloads`, and was opened by QuickTime Player itself to confirm. `PATH`
+  resolution pointed at `Contents/Resources/bin` for all three tools. Homebrew was
+  relinked afterwards. Still open from the plan: README install instructions for app
+  users (task 7 step 5), better written once the DMG exists.
+- **Done (2026-07-30): the tools are `--onedir`.** `deps-2026.07.1` supersedes
+  `deps-2026.07`. gallery-dl went 4.4s → **0.11s** per launch and yt-dlp 8.1s → **0.15s**,
+  and `disable-library-validation` is gone from the project entirely (gotcha #20). One
+  behaviour worth knowing: the **first** run of a freshly installed build costs ~5s while
+  Gatekeeper validates the ~117 nested Mach-Os, then it settles. That is per install, not
+  per launch — don't chase it as a regression.
 
 ## Working logic (proven — reuse, don't reinvent)
 

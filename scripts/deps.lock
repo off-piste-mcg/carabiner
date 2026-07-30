@@ -1,14 +1,21 @@
 # One row per bundled binary: name  url  sha256
 #
-# yt-dlp is upstream's own universal2 build. ffmpeg and gallery-dl have no upstream macOS
-# binaries at all (see CLAUDE.md and the Phase 2 plan), so those come from this repo's own
-# .github/workflows/build-deps.yml, published as a release.
+# All three are built by this repo's .github/workflows/build-deps.yml and published as a
+# release. Upstream has no macOS binary for gallery-dl at all, no official static ffmpeg,
+# and — the reason yt-dlp moved here too — only a --onefile macOS build, which is the
+# thing we are deliberately not shipping any more (see below).
+#
+# ffmpeg is a single static universal binary. gallery-dl and yt-dlp are PyInstaller
+# **--onedir** trees: a launcher beside an _internal/ directory of libraries. They are
+# --onedir rather than --onefile for two reasons, and reverting would silently undo both:
+#   1. A one-file build re-extracts its entire embedded Python to a fresh temp dir on
+#      every launch — 4.4s and 8.1s per invocation, against 0.11s and 0.15s here.
+#   2. It dlopens those extracted libraries, which we did not sign, so it required
+#      com.apple.security.cs.disable-library-validation. --onedir does not.
 #
 # Pin exact versions — "latest" would make builds unreproducible and let a bad upstream
-# release land in a signed, notarized app without anyone noticing.
-#
-# The ffmpeg and gallery-dl hashes are of the .tar.gz, verified before extraction. The
-# yt-dlp hash is of the bare binary and matches the `digest` GitHub reports for the asset.
-yt-dlp      https://github.com/yt-dlp/yt-dlp/releases/download/2026.07.04/yt-dlp_macos                                          498bd0dae17855c599d371d68ec5bafc439a9d8640e838be25c765a9792f261b
-ffmpeg      https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07/ffmpeg-n7.1-macos-universal.tar.gz        def766e6c2f818892c99c37e1dd082c5750ffddb01597856e78f840b3112e497
-gallery-dl  https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07/gallery-dl-1.32.8-macos-universal.tar.gz  5d4045bab649ee7a26d2dec5b2d7829d483bc54071c1b5cb35de66812bcc3b16
+# release land in a signed, notarized app without anyone noticing. The hash is of the
+# .tar.gz, verified before anything is unpacked.
+ffmpeg      https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07.1/ffmpeg-n7.1-macos-universal.tar.gz          029f8a4558947649e77eec2cc685058a0418602fcdc963a10f1bb4ab555aa8e5
+gallery-dl  https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07.1/gallery-dl-1.32.8-macos-universal.tar.gz    bbb9c107e9761ba313721a4f39806b096ada5432c8d5415110dd9405d48ba51d
+yt-dlp      https://github.com/off-piste-mcg/carabiner/releases/download/deps-2026.07.1/yt-dlp-2026.07.04-macos-universal.tar.gz    2121c2b74544b7a197052921436e382dee491087a1d263a2fb4510668740829d
