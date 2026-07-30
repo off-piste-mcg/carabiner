@@ -433,6 +433,43 @@ from the URL for "just this slide".
     `-version` and exits 8 on `--version`, but prints its version banner first, so an
     output-only check reads as a pass on a tool that just failed.
 
+21. **Speed comes from not launching things, not from faster code — and the bundled
+    binaries are the slow part.** Measured on this machine, worst case first:
+    - **PyInstaller one-file startup dominates everything.** `yt-dlp` takes **7.9s** and
+      `gallery-dl` **4.3s** just to reach `--version`, because each unpacks its whole
+      embedded Python framework to a temp dir on *every* launch. Homebrew's copies are
+      plain Python scripts against an installed interpreter: **0.19s** and **0.07s**. Our
+      code signature is not the cause — the ad-hoc CI binaries are identically slow
+      (7.89s vs 7.97s). So Phase 2's bundling made the app 20–40× slower to respond, and
+      the fix is `--onedir` PyInstaller builds in `build-deps.yml` (which would also let
+      us drop the entitlement in gotcha #20, since we'd sign every nested library). Until
+      that happens, bundling costs real responsiveness for portability.
+    - **Re-encoding was unconditional.** A 45s reel that was *already* 8-bit yuv420p H.264
+      cost 12.3s of libx264 to produce a slightly worse copy of itself. `plan_reencode`
+      now probes with one `ffmpeg -i` (~0.05s) and stream-copies when the video is already
+      safe: **12.3s → 0.2s**. Only genuinely odd files (gotcha #3's 10-bit / yuv444p) pay
+      for the encode. The pixel-format test matches `yuv420p` followed by a non-alphanumeric
+      **on purpose** — `yuv420p10le` contains `yuv420p` as a prefix and is exactly the file
+      that must never be copied.
+    - **The carousel probe is a whole extra tool launch.** It is skipped entirely when
+      `img_index` is ≥ 2, which proves a carousel from the URL alone. This does not
+      invert: a *missing* `img_index` still proves nothing (gotcha #15), so that path
+      still probes. When the probe is skipped the slide count is unknown, and the prompt
+      is written to read correctly without it.
+
+    There is no `ffprobe` in the bundle — only `ffmpeg`, `yt-dlp` and `gallery-dl` — which
+    is why the probe parses `ffmpeg -i` stderr rather than using the obvious tool.
+
+22. **The app posts one notification per grab, not two.** `Notifier` posts "Grabbing…"
+    immediately (before reading the tab, since AppleScript is part of the wait) and the
+    outcome re-uses the **same identifier**, so it replaces that banner in place. A fresh
+    UUID per banner — the obvious way — leaves both stacked in Notification Centre and a
+    stale "Grabbing…" outliving the grab it described. The shell script does the
+    equivalent for the Shortcut path with a plain banner, still gated on
+    `CARABINER_NO_NOTIFY` so the app never doubles up. This matters beyond polish: until
+    something appears, a slow grab and a hotkey that never fired are indistinguishable,
+    and a silently-lost chord is a real failure mode (gotcha #14).
+
 ## Dependencies
 
 - `yt-dlp` — video (IG/YouTube/etc.)

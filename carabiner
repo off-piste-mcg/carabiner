@@ -160,10 +160,18 @@ ig_item_count() {
 #   terminal -> text prompt;  headless (hotkey) -> plain native macOS dialog.
 # Echoes: slide | all | cancel.  Safe default is `slide` (never grabs nothing by mistake).
 ask_slide_or_all() {
+  # $1 may be empty: when img_index proved this is a carousel we skip the probe that
+  # would have counted the slides, so the prompt drops the number rather than paying a
+  # whole extra tool launch to print it. Everything below has to read sensibly either way.
   local count="$1"
+  local descr="a carousel" all_label="All"
+  if [ -n "$count" ]; then
+    descr="a carousel with $count slides"
+    all_label="All $count"
+  fi
 
   if [ -t 0 ]; then
-    printf 'Carousel of %s slides — grab just this slide or [a]ll? (s/a) ' "$count" >&2
+    printf 'Carousel%s — grab just this slide or [a]ll? (s/a) ' "${count:+ of $count slides}" >&2
     local ans; read -r ans
     case "$ans" in a|A|all|All) echo all ;; *) echo slide ;; esac
     return 0
@@ -184,7 +192,7 @@ ask_slide_or_all() {
 $icon_setup
 tell application "System Events"
   activate
-  set r to button returned of (display dialog "This Instagram post is a carousel with $count slides.\n\nGrab just the slide you're on, or the whole carousel?" buttons {"Cancel", "This slide", "All $count"} default button "All $count" with title "Carabiner" $icon_clause)
+  set r to button returned of (display dialog "This Instagram post is $descr.\n\nGrab just the slide you're on, or the whole carousel?" buttons {"Cancel", "This slide", "$all_label"} default button "$all_label" with title "Carabiner" $icon_clause)
 end tell
 return r
 EOF
@@ -199,12 +207,60 @@ EOF
 
 # Re-encode any video to a QuickTime-friendly 8-bit yuv420p H.264 mp4.
 #   reencode <in> <out> <silent 0|1>
-reencode() {
-  if [ "$3" -eq 1 ]; then
-    ffmpeg -y -loglevel error -i "$1" -c:v libx264 -pix_fmt yuv420p -an "$2"
-  else
-    ffmpeg -y -loglevel error -i "$1" -c:v libx264 -c:a aac -pix_fmt yuv420p "$2"
+# Work out the cheapest ffmpeg arguments that still produce a QuickTime-openable file,
+# into the REENC_ARGS array.
+#
+# Gotcha #3 is about Instagram's *odd* pixel formats — 10-bit, yuv444p — not about every
+# video it serves. Most reels are already 8-bit yuv420p H.264, and re-encoding those burns
+# ~12s on a 45s clip to produce a slightly worse copy of a file that was already fine. One
+# `ffmpeg -i` probe costs ~0.05s, so it is always worth asking before burning the encode.
+#
+# Deliberately conservative: anything we are not certain about falls through to the full
+# libx264 re-encode, which is the guaranteed fix. Do not widen the "safe" test without
+# re-reading gotcha #3 — a file that plays here but not in QuickTime is the whole bug.
+plan_reencode() {
+  local src="$1" silent="$2" info vline aline vsafe=0 asafe=0
+
+  # ffmpeg exits non-zero when given no output file, which is exactly how we are calling
+  # it — the stream table we want is on stderr either way.
+  info="$(ffmpeg -hide_banner -i "$src" 2>&1 || true)"
+  vline="$(printf '%s\n' "$info" | grep -m1 'Stream #.*Video:')"
+  aline="$(printf '%s\n' "$info" | grep -m1 'Stream #.*Audio:')"
+
+  # The trailing character class is load-bearing: "yuv420p10le" and "yuv420p12le" both
+  # contain "yuv420p", and those are precisely the 10-bit files gotcha #3 is about. A
+  # plain substring match would copy the one format we must always re-encode.
+  if printf '%s' "$vline" | grep -q 'Video: h264' \
+     && printf '%s' "$vline" | grep -qE 'yuv420p([^0-9a-z]|$)'; then
+    vsafe=1
   fi
+
+  # No audio stream at all is fine; otherwise only AAC is safe to pass through.
+  if [ -z "$aline" ] || printf '%s' "$aline" | grep -q 'Audio: aac'; then
+    asafe=1
+  fi
+
+  if [ "$vsafe" -eq 1 ]; then
+    REENC_ARGS=(-c:v copy)
+    if   [ "$silent" -eq 1 ]; then REENC_ARGS+=(-an)
+    elif [ "$asafe"  -eq 1 ]; then REENC_ARGS+=(-c:a copy)
+    else                           REENC_ARGS+=(-c:a aac)
+    fi
+    # Cheap here and it means the file starts playing before it has fully loaded.
+    REENC_ARGS+=(-movflags +faststart)
+  else
+    REENC_ARGS=(-c:v libx264 -pix_fmt yuv420p)
+    if [ "$silent" -eq 1 ]; then REENC_ARGS+=(-an); else REENC_ARGS+=(-c:a aac); fi
+  fi
+}
+
+# Turn any downloaded video into a QuickTime-friendly 8-bit yuv420p H.264 mp4 —
+# by remuxing when it already is one, and by re-encoding when it isn't.
+reencode() {
+  local src="$1" out="$2" silent="$3"
+  local -a REENC_ARGS
+  plan_reencode "$src" "$silent"
+  ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$out"
 }
 
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
@@ -324,6 +380,12 @@ mkdir -p "$OUTDIR" || die "cannot create output dir: $OUTDIR"
 PLATFORM="$(platform "$URL")"
 info "carabiner → $PLATFORM  (cookies: $BROWSER, out: ${OUTDIR/#$HOME/~})"
 
+# Say something *now*. Cookie extraction, the download and any re-encode all happen before
+# there is a result to report, and until then a slow grab and a hotkey that never fired
+# look identical. Suppressed in a terminal (NOTIFY) and under the app, which posts its own
+# branded equivalent and replaces it in place — this one is for the Shortcut path.
+notify "Grabbing…" "Saving to ${OUTDIR/#$HOME/~}"
+
 case "$PLATFORM" in
   instagram)
     CODE="$(ig_shortcode "$URL")"
@@ -340,12 +402,31 @@ case "$PLATFORM" in
       IDX="$(img_index "$URL")"
       # Only /p/ posts can be carousels — /reel/, /reels/ and /tv/ are always one
       # video — so reels don't pay for the gallery-dl probe ig_item_count costs.
-      COUNT=1
-      case "$URL" in */p/*) COUNT="$(ig_item_count "$URL")" ;; esac
-      if [ "${COUNT:-1}" -gt 1 ]; then
-        info "  (carousel: $COUNT slides — asking…)"
+      # img_index=N with N>=2 can only have come from a carousel: Instagram adds the
+      # parameter once you scroll off slide 1 (gotcha #15). That is proof from the URL
+      # alone, so skip the ig_item_count probe entirely — it is a whole extra tool launch
+      # (~0.8s against Homebrew, ~13s against the bundled PyInstaller build) spent
+      # confirming something already known. The count is only cosmetic in the prompt, and
+      # the "all" branch hands the whole URL to gallery-dl, which counts them itself.
+      # Note this cannot be inverted: a *missing* img_index proves nothing, which is
+      # exactly the trap gotcha #15 documents, so that case still has to probe.
+      COUNT=""
+      CAROUSEL=0
+      if [ -n "$IDX" ] && [ "${IDX:-0}" -ge 2 ] 2>/dev/null; then
+        CAROUSEL=1
+      else
+        case "$URL" in
+          */p/*)
+            COUNT="$(ig_item_count "$URL")"
+            if [ "${COUNT:-1}" -gt 1 ]; then CAROUSEL=1; fi
+            ;;
+        esac
+      fi
+
+      if [ "$CAROUSEL" -eq 1 ]; then
+        info "  (carousel${COUNT:+: $COUNT slides} — asking…)"
         case "$(ask_slide_or_all "$COUNT")" in
-          all)    MODE="all";                            info "  → grabbing all $COUNT slides" ;;
+          all)    MODE="all";                            info "  → grabbing all${COUNT:+ $COUNT} slides" ;;
           cancel) info "  cancelled."; exit 0 ;;
           *)      MODE="slide"; SLIDE="${IDX:-1}";       info "  → grabbing slide ${IDX:-1} only" ;;
         esac

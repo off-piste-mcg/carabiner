@@ -47,6 +47,11 @@ final class MenuBarController: NSObject {
             NSLog("Carabiner: grab ignored — a grab is already running")
             return
         }
+        // Before reading the tab, not after: resolve() drives AppleScript on this thread
+        // and is itself part of the delay the user is waiting through. Any outcome below
+        // replaces this banner rather than adding to it, so an early failure still shows
+        // exactly one notification.
+        notifier.showWorking()
         let url: String
         switch tabReader.resolve() {
         case .url(let u):
