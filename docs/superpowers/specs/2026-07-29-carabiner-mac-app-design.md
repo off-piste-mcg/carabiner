@@ -146,12 +146,29 @@ users / fallback.
 
 ## Suggested phasing (for the implementation plan)
 
-1. **Core app**: menu-bar item + hotkey + TabReader + run the (Homebrew-installed) script
-   → branded notification. Proves the UX end-to-end on the dev machine.
+> **Corrected 2026-07-29 after building Phase 1.** The original ordering below put signing
+> at step 4 and treated the branded notification as a step-1 win. That is impossible:
+> macOS will not register an ad-hoc-signed bundle for notifications at all, so the banner
+> — the entire reason for building the app — cannot work before signing. **Development
+> signing is a Phase 1 dependency** and now lives in `app/project.yml`. What stays in the
+> distribution phase is *Developer ID* signing + notarization + stapling, which is a
+> different certificate and a different problem. See gotchas #11–#13.
+
+1. **Core app** ✅ *done*: menu-bar item + hotkey + TabReader + run the
+   (Homebrew-installed) script → branded notification, **+ development code signing**
+   (required for the notification to work at all). Proves the UX end-to-end on the dev
+   machine.
 2. **Bundle binaries**: ship yt-dlp/ffmpeg/gallery-dl inside; app no longer needs
    Homebrew. Adapt the script's result output for the app.
+   > **Blocker to fix first:** `carabiner` line 37 does
+   > `export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"`, re-prepending Homebrew *ahead
+   > of* whatever the app sets. Bundled binaries will be silently shadowed on any machine
+   > that also has Homebrew's yt-dlp — i.e. every machine this gets tested on, so it will
+   > look like it works. Make that line conditional (e.g. skip when `CARABINER_BUNDLED` is
+   > set) and decide deliberately whether the script stays shared with the Shortcut path.
 3. **Native carousel popover** (replace the osascript dialog).
-4. **Signing + notarization + DMG**: warping into a distributable, warning-free app.
+4. **Distribution**: Developer ID signing + notarization + stapling + DMG — a
+   warning-free install for people outside the dev machine.
 5. **Sparkle auto-update** + appcast on GitHub Releases.
 6. (Stretch) **yt-dlp self-refresh.**
 

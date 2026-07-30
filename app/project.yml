@@ -14,6 +14,18 @@ targets:
     sources: [Carabiner]
     dependencies:
       - package: KeyboardShortcuts
+    postBuildScripts:
+      # This repo lives under ~/Documents, which is iCloud-synced, and the file provider
+      # stamps com.apple.FinderInfo (plus com.apple.fileprovider.fpfs#P) onto the built
+      # bundle. codesign refuses those outright — "resource fork, Finder information, or
+      # similar detritus not allowed" — so an in-build signature fails. postBuildScripts
+      # run before Xcode's CodeSign step, which makes this the right place to strip them.
+      - name: Strip iCloud xattrs before signing
+        basedOnDependencyAnalysis: false
+        script: |
+          if [ -d "$TARGET_BUILD_DIR/$WRAPPER_NAME" ]; then
+            xattr -cr "$TARGET_BUILD_DIR/$WRAPPER_NAME"
+          fi
     info:
       path: Carabiner/Info.plist
       properties:
@@ -31,6 +43,25 @@ targets:
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         GENERATE_INFOPLIST_FILE: NO
+        # Signing is NOT deferrable to the distribution phase. macOS refuses to register
+        # an ad-hoc/linker-signed bundle for user notifications: requestAuthorization
+        # fails with UNErrorDomain 1 (notificationsNotAllowed), no prompt is ever shown,
+        # and every banner silently fails. Worse, an unsigned copy anywhere on disk
+        # registers a team-less "NOTIFICATION#:com.offpiste.carabiner" record with
+        # LaunchServices that poisons the signed one — so one stray unsigned build breaks
+        # notifications for the signed app too. The branded banner is the whole reason
+        # this app exists, so every build signs.
+        # The team comes from your environment so no one's personal Team ID is baked into
+        # this public repo. Before `xcodegen generate`, run:
+        #   export CARABINER_TEAM_ID=$(security find-certificate -a -c "Apple Development" \
+        #     -p | openssl x509 -noout -subject | tr ',/' '\n\n' \
+        #     | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -1)
+        # Read the team from the certificate's OU field, NOT the parenthetical in the
+        # identity name — that parenthetical is the agent ID and signing fails with it.
+        # See app/README.md.
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}
   CarabinerTests:
     type: bundle.unit-test
     platform: macOS

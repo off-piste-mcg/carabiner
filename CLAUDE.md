@@ -46,11 +46,29 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   user sets their own hotkey (keyboard shortcuts aren't stored in a shared shortcut).
   The shortcut's Run Shell Script uses a portable one-liner so it finds `carabiner` on
   both Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`).
+- **`app/`** — **`Carabiner.app`, the native Swift/AppKit menu-bar app (Phase 1 done).**
+  Menu-bar only (`LSUIElement`), OFF-PISTE logo status item, global ⌃⌥⌘V hotkey. Reads the
+  front browser tab via AppleScript, shells out to this repo's `carabiner` script, and
+  posts a **branded** notification with the filename (or "N files"). Swift owns the
+  experience; bash still owns the grabbing — the app never re-implements the pipeline.
+  Built with XcodeGen (`xcodegen generate` from `app/`; the `.xcodeproj` and the generated
+  `Info.plist` are gitignored — `project.yml` is the single source of truth). **Requires a
+  development code signature to work at all — see gotcha #11.** Build with:
+  ```bash
+  export CARABINER_TEAM_ID=$(security find-certificate -a -c "Apple Development" -p \
+    | openssl x509 -noout -subject | tr ',/' '\n\n' \
+    | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -1)
+  cd app && xcodegen generate && xcodebuild -scheme Carabiner -configuration Debug build
+  ```
+  The app and the Shortcut cannot share a hotkey (gotcha #14) — pick one.
 - **`files/`** — original seed: proven `igdl`/`igdls` functions + the `ig-grab.js`
   bookmarklet. Reference only.
 
 **Decision that was made:** images fold into the paste-a-link flow via gallery-dl (the
 click-to-pick bookmarklet is retired to `files/` as reference, not part of the tool).
+
+**Decision that was made:** the app is the primary UX going forward; the Shortcut stays as
+the zero-install fallback for anyone who doesn't want the app. Both drive the same script.
 
 ## Working logic (proven — reuse, don't reinvent)
 
@@ -117,6 +135,49 @@ from the URL for "just this slide".
     Settings to grant) — the same portability problem as the branded dialog (gotcha #9).
     So notifications stay plain. Don't re-attempt the applet route for this shared tool.
     (`LOGO.jpg` is kept in the repo as the brand asset, but nothing consumes it.)
+
+    **Superseded for `Carabiner.app` (2026-07-29).** The applet route was the wrong
+    vehicle, not the wrong goal. A *signed* app bundle posting via
+    `UNUserNotificationCenter` gets the logo, the app name, and a real authorisation
+    prompt — verified working. The shell tool keeps its plain banner; the app is branded.
+    See gotcha #11 for the condition that makes it work.
+
+11. **The app's branded notification REQUIRES a real code signature — this is not
+    deferrable to a distribution phase.** macOS refuses to register an ad-hoc /
+    linker-signed bundle for user notifications: `requestAuthorization` fails instantly
+    with `UNErrorDomain error 1` (`notificationsNotAllowed`), **no prompt is ever shown**,
+    and every `add(request)` fails. Worse, an unsigned copy of the same bundle id anywhere
+    on disk registers a team-less `NOTIFICATION#:com.offpiste.carabiner` record with
+    LaunchServices that poisons the signed one — so a stray `xcodebuild` output in
+    DerivedData silently breaks notifications for the properly signed app. Two consequences:
+    every build signs (`CODE_SIGN_STYLE: Automatic` in `app/project.yml`), and unsigned
+    build products must not be left lying around. Launch matters too: launch the bundle
+    (`open`), never the inner binary — direct exec skips LaunchServices, so the bundle
+    identity `UNUserNotificationCenter` needs is missing and authorisation fails.
+
+12. **The Team ID is in the certificate's OU field, NOT the parenthetical in the identity
+    name.** `security find-identity` prints `Apple Development: you@example.com (3KQ6AH5M2C)`
+    — that parenthetical is the *agent* ID, and signing with it fails with "No signing
+    certificate ... matching team ID". The real Team ID:
+    ```bash
+    security find-certificate -a -c "Apple Development" -p \
+      | openssl x509 -noout -subject | tr ',/' '\n\n' \
+      | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -1
+    ```
+
+13. **iCloud-synced folders break `codesign`.** This repo lives under `~/Documents`, which
+    is iCloud-synced, and the file provider stamps `com.apple.FinderInfo` (plus
+    `com.apple.fileprovider.fpfs#P`) onto the built `.app`. `codesign` rejects those:
+    *"resource fork, Finder information, or similar detritus not allowed"*. `app/project.yml`
+    carries a `postBuildScripts` phase that runs `xattr -cr` on the bundle — post-build
+    scripts run *before* Xcode's CodeSign step, which is why that is the right hook.
+
+14. **A global hotkey is exclusive, and losing it is silent.** `RegisterEventHotKey` fails
+    outright if another app already owns the chord — and neither it nor the
+    `KeyboardShortcuts` package reports that. While the macOS Shortcut was still bound to
+    ⌃⌥⌘V, every press went to the Shortcut and the app never heard about it, which looked
+    exactly like a broken app. The app now logs the chord it registered and every fire.
+    Only one thing can own a chord: if the app has the hotkey, unbind the Shortcut's.
 
 ## Dependencies
 
