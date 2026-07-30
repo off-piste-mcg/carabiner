@@ -58,22 +58,19 @@ case "$actual" in
   *)          check "empty CARABINER_BIN leaves no empty PATH entry" "clean" "clean" ;;
 esac
 
-# 4. With CARABINER_BIN unset, the resulting PATH must be byte-for-byte identical to
-#    the pre-change script's PATH — the Shortcut/terminal path is not allowed to change
-#    behaviour at all. Build the same prologue slice from the pre-change script
-#    (git HEAD, before this fix) and diff the two PATH strings.
-OLD_SCRIPT="$BUNDLED/.carabiner.old"
-if git -C "$HERE/.." show HEAD:carabiner > "$OLD_SCRIPT" 2>/dev/null; then
-  OLD_PROLOGUE="$BUNDLED/.prologue.old.sh"
-  sed -n '1,/^BROWSER=/p' "$OLD_SCRIPT" | sed '$d' > "$OLD_PROLOGUE"
-
-  old_path="$(unset CARABINER_BIN; bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "$PATH"' _ "$OLD_PROLOGUE")"
-  new_path="$(unset CARABINER_BIN; show_path)"
-  check "unset CARABINER_BIN: PATH identical to pre-change script" "$old_path" "$new_path"
-else
-  printf '  FAIL %s\n       could not read HEAD:carabiner\n' "unset CARABINER_BIN: PATH identical to pre-change script"
-  fail=$((fail + 1))
-fi
+# 4. With CARABINER_BIN unset, the resulting PATH must be exactly the original
+#    Homebrew-prefixed PATH — the Shortcut/terminal path is not allowed to change
+#    behaviour at all. The reference here is a hardcoded expected string built from
+#    this test's own inbound PATH, NOT `git show HEAD:carabiner` — a git-HEAD
+#    reference looked meaningful the day this fix was written, but the moment the
+#    fix is committed HEAD:carabiner IS the new script, so the comparison silently
+#    degenerates into "does the file match itself" and can never fail again,
+#    regardless of a real future regression. A hardcoded expected value has no such
+#    expiry: it fails if the else-branch's prefix ever changes.
+inbound_path="$PATH"
+expected="/opt/homebrew/bin:/usr/local/bin:$inbound_path"
+actual="$(unset CARABINER_BIN; show_path)"
+check "unset CARABINER_BIN produces the expected Homebrew-prefixed PATH" "$expected" "$actual"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
