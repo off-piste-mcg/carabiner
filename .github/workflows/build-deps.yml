@@ -14,26 +14,55 @@ on:
         required: true
         default: "1.32.8"
 
+# Read-only by default. The deferred release-publish step (not part of this
+# workflow yet) will need `contents: write` to attach assets to a release.
+permissions:
+  contents: read
+
 jobs:
   ffmpeg:
     strategy:
       matrix:
         include:
-          - runner: macos-14   # Apple Silicon
-            arch: arm64
-          - runner: macos-13   # Intel
+          # macos-13 (Intel) was fully retired 2025-12-08 — that leg would fail
+          # to schedule at all. macos-15-intel is the current Intel label.
+          - runner: macos-15-intel
             arch: x86_64
+          # macos-14 entered deprecation 2026-07-06 and retires 2026-11-02
+          # (October brownouts hard-fail jobs on that label beforehand).
+          # macos-15 is the current Apple Silicon label.
+          - runner: macos-15
+            arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Build static x264
+        env:
+          # x264 is linked into ffmpeg, so it needs the same deployment-target
+          # floor as the ffmpeg build below (see that step for why).
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           set -euo pipefail
-          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          # x264 has no tagged releases, so pin an explicit commit — this
+          # artifact ends up inside a signed, notarized app and must not float
+          # with upstream's master branch. Resolved via `git ls-remote` against
+          # videolan/x264 master at the time this pin was written.
+          X264_COMMIT=0480cb05fa188d37ae87e8f4fd8f1aea3711f7ee
+          git init x264
           cd x264
+          git remote add origin https://code.videolan.org/videolan/x264.git
+          git fetch --depth 1 origin "$X264_COMMIT"
+          git checkout FETCH_HEAD
           ./configure --prefix="$HOME/ffbuild" --enable-static --disable-cli --disable-opencl
           make -j"$(sysctl -n hw.ncpu)" && make install
 
       - name: Build static ffmpeg
+        env:
+          # Neither build sets a deployment target, so clang defaults `minos`
+          # to the host OS (e.g. 15.0 on an arm64 macos-15 runner) — but the
+          # app's floor is 13.0 (app/project.yml deploymentTarget.macOS). Without
+          # this, a bundled ffmpeg would be a binary the dynamic loader refuses
+          # to run on macOS 13, and it can't reproduce on any of these runners.
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           set -euo pipefail
           git clone --depth 1 --branch "${{ inputs.ffmpeg_version }}" \
@@ -60,17 +89,24 @@ jobs:
           if otool -L "$BIN" | tail -n +2 | grep -vE '^\s+(/usr/lib|/System/Library)'; then
             echo "::error::ffmpeg links non-system libraries"; exit 1
           fi
-          lipo -archs "$BIN"
+          # This leg builds a single-arch slice (matrix.arch) — assert it is
+          # exactly that arch, not "universal", since printing lipo -archs
+          # without comparing it gates nothing (it exits 0 on any arch at all).
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "archs: $ARCHS"
+          [ "$ARCHS" = "${{ matrix.arch }}" ] \
+            || { echo "::error::expected a single ${{ matrix.arch }} slice, got: $ARCHS"; exit 1; }
           "$BIN" -version | head -1
 
       - uses: actions/upload-artifact@v4
         with:
           name: ffmpeg-${{ matrix.arch }}
           path: ~/ffout/bin/ffmpeg
+          if-no-files-found: error
 
   ffmpeg-universal:
     needs: ffmpeg
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/download-artifact@v4
         with: { name: ffmpeg-arm64, path: arm64 }
@@ -81,7 +117,13 @@ jobs:
           set -euo pipefail
           chmod +x arm64/ffmpeg x86_64/ffmpeg
           lipo -create arm64/ffmpeg x86_64/ffmpeg -output ffmpeg
-          lipo -archs ffmpeg   # expect: x86_64 arm64
+          # Don't rely on the incidental protection that lipo -create errors on
+          # two same-arch inputs — assert the result explicitly contains both
+          # slices, since printing lipo -archs alone gates nothing.
+          ARCHS="$(lipo -archs ffmpeg)"
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -qw arm64 && echo "$ARCHS" | grep -qw x86_64 \
+            || { echo "::error::expected a universal (arm64 + x86_64) binary, got: $ARCHS"; exit 1; }
           ./ffmpeg -version | head -1
           tar -czf "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz" ffmpeg
           shasum -a 256 "ffmpeg-${{ inputs.ffmpeg_version }}-macos-universal.tar.gz"
@@ -89,6 +131,7 @@ jobs:
         with:
           name: ffmpeg-universal
           path: ffmpeg-*.tar.gz
+          if-no-files-found: error
 
   gallery-dl:
     runs-on: macos-14
