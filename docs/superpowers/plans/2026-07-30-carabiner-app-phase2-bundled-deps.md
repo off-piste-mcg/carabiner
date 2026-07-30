@@ -314,6 +314,35 @@ git commit -m "feat(app): bundle the carabiner script and pass CARABINER_BIN"
 
 ### Task 3: CI — build a static universal ffmpeg
 
+> **Corrected after review, 2026-07-30. The YAML inlined in Tasks 3 and 4 below is
+> SUPERSEDED — do not re-derive a brief from it.** `.github/workflows/build-deps.yml` as
+> committed (`d4b117c`) is the authoritative version. Six defects were found in the text
+> below, two of which would have produced a *green* run with no usable artifact:
+>
+> 1. **`macos-13` was retired 2025-12-08** and `macos-14` is deprecated (retires
+>    2026-11-02). The Intel leg dies on a runner-image error, `ffmpeg-universal` then
+>    *skips* via `needs:` rather than failing, and the arm64 leg still burns ~25 minutes
+>    and reports success — having produced no universal ffmpeg. Use `macos-15-intel` and
+>    `macos-15`.
+> 2. **`--list-extractors | grep -qi instagram` fails on a correct binary.** Under
+>    `set -o pipefail`, grep exits at the first match, CPython takes EPIPE and exits 120,
+>    and pipefail propagates it. Reproduced against real gallery-dl 1.32.8. Capture the
+>    listing to a file once and grep the file.
+> 3. **No deployment target**, so `minos` defaults to the host OS while the app declares a
+>    13.0 floor — macOS 13 users would get an ffmpeg the loader rejects, and it cannot
+>    reproduce on any runner. Set `MACOSX_DEPLOYMENT_TARGET=13.0` for x264 *and* ffmpeg.
+> 4. **Floating versions** — x264 at default HEAD, `pyinstaller` unpinned,
+>    `python-version: "3.12"` drifting. These land inside a signed, notarized app. Note
+>    3.12.11+ ship no darwin builds at all, so 3.12.10 is the newest usable one, and x264
+>    has zero tags upstream so a commit SHA is the only real pin.
+> 5. **`architecture: "x64"`** is unnecessary — `actions/python-versions` installs
+>    python.org's universal2 pkg for both the x64 and arm64 manifest entries — and it adds
+>    a constraint (a darwin-x64 asset must exist) that newer 3.12 releases no longer meet.
+> 6. **`lipo -archs` was printed, never asserted**, so it gated nothing; it exits 0 on a
+>    single-arch binary. Assert it — equality with `matrix.arch` in the per-arch legs
+>    (stronger there: it also catches a mis-scheduled runner), both arches in the two
+>    genuinely universal outputs.
+
 Homebrew's ffmpeg links 18 Homebrew dylibs, so it cannot be copied into a bundle. There is no official static macOS build. This produces one.
 
 **Files:**
