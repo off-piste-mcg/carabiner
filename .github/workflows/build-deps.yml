@@ -86,8 +86,19 @@ jobs:
           # A static build must not reference anything outside /usr/lib and
           # /System/Library — a single Homebrew dylib here means the binary is
           # unshippable, and the failure would only surface on a machine without brew.
-          if otool -L "$BIN" | tail -n +2 | grep -vE '^\s+(/usr/lib|/System/Library)'; then
-            echo "::error::ffmpeg links non-system libraries"; exit 1
+          #
+          # Run otool -L as its OWN command first, into a variable, rather than
+          # inside `if otool ... | grep ...`. Under set -euo pipefail, if otool
+          # itself fails (bad path, unreadable file, not a Mach-O), that failure
+          # inside the pipeline reads to the `if` as "grep found nothing" — the
+          # gate would PASS a binary it never actually inspected. Capturing the
+          # command on its own line means an otool failure fails the step outright.
+          OTOOL_OUT="$(otool -L "$BIN")"
+          NON_SYSTEM="$(echo "$OTOOL_OUT" | tail -n +2 | grep -vE '^\s+(/usr/lib|/System/Library)' || true)"
+          if [ -n "$NON_SYSTEM" ]; then
+            echo "::error::ffmpeg links non-system libraries"
+            echo "$NON_SYSTEM"
+            exit 1
           fi
           # This leg builds a single-arch slice (matrix.arch) — assert it is
           # exactly that arch, not "universal", since printing lipo -archs
@@ -96,6 +107,26 @@ jobs:
           echo "archs: $ARCHS"
           [ "$ARCHS" = "${{ matrix.arch }}" ] \
             || { echo "::error::expected a single ${{ matrix.arch }} slice, got: $ARCHS"; exit 1; }
+          # MACOSX_DEPLOYMENT_TARGET=13.0 is set on both build steps above, but
+          # nothing asserts it actually took effect. Without it, clang defaults
+          # `minos` to the host OS (e.g. 15.0 on a macos-15 runner) — a slice
+          # built against a higher minos is rejected by the dynamic loader on
+          # macOS 13, the app's declared floor (app/project.yml
+          # deploymentTarget.macOS), and that failure can't reproduce on any of
+          # these runners. This leg is single-arch, so one vtool block is the
+          # whole answer (a universal binary would need one check per slice).
+          # Write vtool's output to a file (not a live pipe) first: a failure
+          # in vtool itself then fails the step outright, and reading the
+          # result back from a file — rather than piping the command straight
+          # into grep/head — can't hit the EPIPE trap the gallery-dl job below
+          # documents (an early-exiting consumer killing a still-writing
+          # producer under pipefail).
+          vtool -show-build "$BIN" > vtool-build.txt
+          cat vtool-build.txt
+          MINOS="$(grep -m1 '^[[:space:]]*minos ' vtool-build.txt | awk '{print $2}')"
+          [ -n "$MINOS" ] || { echo "::error::could not determine minos from vtool output"; exit 1; }
+          [ "$MINOS" = "13.0" ] \
+            || { echo "::error::expected minos 13.0 (MACOSX_DEPLOYMENT_TARGET), got: $MINOS"; exit 1; }
           "$BIN" -version | head -1
 
       - uses: actions/upload-artifact@v4
