@@ -77,10 +77,19 @@ trap 'rm -rf "$BUNDLED"' EXIT
 printf '#!/bin/bash\necho BUNDLED\n' > "$BUNDLED/yt-dlp"
 chmod +x "$BUNDLED/yt-dlp"
 
-# Ask the script which yt-dlp it would use, without running a grab: source only the
-# PATH block (everything above the first blank line after it) in a subshell.
+# Ask the script which yt-dlp it would use, without running a grab or touching the
+# network. Take the script's whole prologue — everything before the first setting
+# (`BROWSER=`) — and source it in a subshell. Slicing at `export PATH=` instead would
+# cut the if/else in half and leave an unterminated `if`.
+PROLOGUE="$BUNDLED/.prologue.sh"
+sed -n '1,/^BROWSER=/p' "$SCRIPT" | sed '$d' > "$PROLOGUE"
+
 resolve_ytdlp() {  # env comes from the caller
-  bash -c 'eval "$(sed -n "1,/^export PATH=/p;/^fi$/q" "$0" | grep -vE "^#|^$")" 2>/dev/null; command -v yt-dlp' "$SCRIPT"
+  bash -c 'source "$1" >/dev/null 2>&1; command -v yt-dlp' _ "$PROLOGUE"
+}
+
+show_path() {
+  bash -c 'source "$1" >/dev/null 2>&1; printf "%s" "$PATH"' _ "$PROLOGUE"
 }
 
 echo "test-path.sh"
@@ -99,7 +108,7 @@ esac
 # 3. An empty CARABINER_BIN must not inject an empty PATH entry (":" means cwd —
 #    a real security footgun, since it would run ./yt-dlp from whatever directory
 #    the hotkey happened to fire in).
-actual="$(CARABINER_BIN="" bash -c 'eval "$(sed -n "1,/^export PATH=/p;/^fi$/q" "$0" | grep -vE "^#|^$")"; echo "$PATH"' "$SCRIPT")"
+actual="$(CARABINER_BIN="" show_path)"
 case "$actual" in
   *::*|:*|*:) check "empty CARABINER_BIN leaves no empty PATH entry" "clean" "empty entry in: $actual" ;;
   *)          check "empty CARABINER_BIN leaves no empty PATH entry" "clean" "clean" ;;
