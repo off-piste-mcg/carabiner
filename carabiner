@@ -331,9 +331,21 @@ ig_gallery() {
   local -a args=(--cookies-from-browser "$BROWSER" -D "$tmp" -q)
   [ -n "$slide" ] && args+=(--range "$slide")
 
-  if ! gallery-dl "${args[@]}" "$url"; then
+  # Keep gallery-dl's own words. This used to run bare and die with a guess — "private
+  # post? wrong browser cookies?" — which is useless in a notification, because that is
+  # the one place you cannot go and look at the terminal output. gallery-dl already says
+  # whether it was a 404, a login wall, a rate limit or a cookie problem; report that.
+  local log rc
+  log="$(gallery-dl "${args[@]}" "$url" 2>&1)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
     rm -rf "$tmp"
-    die "gallery-dl could not fetch this URL (private post? wrong browser cookies?)."
+    echo "$log" >&2
+    # Last non-empty line is gallery-dl's actual complaint; trim the noisy prefixes it
+    # puts on log lines so the notification body stays readable.
+    local reason
+    reason="$(printf '%s\n' "$log" | grep -v '^\s*$' | tail -n1 \
+              | sed -E 's/^\[[^]]+\]\[[^]]+\] //; s/^\[[^]]+\] //')"
+    die "gallery-dl failed: ${reason:-no output (exit $rc)}"
   fi
 
   local n=0 i=0 f ext base out
