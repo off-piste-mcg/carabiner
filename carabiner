@@ -152,7 +152,16 @@ resolve_url() {
 # slide without downloading.) Echoes a number; 1 if it can't tell.
 ig_item_count() {
   local n
-  n="$(gallery-dl --cookies-from-browser "$BROWSER" -g "$1" 2>/dev/null | grep -cE '^https?://')"
+  # `gallery-dl -g` prints one line per slide, but NOT all in the same shape:
+  #   https://scontent…/x.jpg                     an image slide
+  #   ytdl:https://www.instagram.com/p/CODE/1.mp4 a VIDEO slide, prefixed "ytdl:"
+  #   | https://scontent…/AQMq…                   a continuation of the line above
+  # Counting only /^https?:/ therefore misses every video slide, and a two-slide
+  # video+image carousel counts as 1 — so the prompt never fires and the tool silently
+  # grabs the whole set. That is exactly the symptom gotcha #15 is about, reached by a
+  # different route, and it is invisible on all-image carousels which count correctly.
+  # Anchoring also matters: the "| " continuation line must not be counted twice.
+  n="$(gallery-dl --cookies-from-browser "$BROWSER" -g "$1" 2>/dev/null | grep -cE '^(ytdl:)?https?://')"
   [ "${n:-0}" -ge 1 ] 2>/dev/null && echo "$n" || echo 1
 }
 
