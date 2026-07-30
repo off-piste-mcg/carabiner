@@ -110,4 +110,33 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertEqual(result?.ok, false)
         XCTAssertEqual(result?.message, "giving up")
     }
+
+    /// The app must hand the script its private bin directory. Without this the script
+    /// falls back to Homebrew, which is exactly the silent-shadowing failure Phase 2 exists
+    /// to remove — and it would look like bundling worked on any dev machine.
+    func testPassesCarabinerBinWhenBundleHasOne() {
+        let binDir = NSTemporaryDirectory() + "carabiner-bin-\(UUID().uuidString)"
+        try! FileManager.default.createDirectory(atPath: binDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: binDir) }
+
+        let stub = writeStub("echo \"  ✓ ${CARABINER_BIN:-UNSET}\"; exit 0")
+        var runner = GrabRunner(executable: stub)
+        runner.binDirectory = binDir
+        let result = runner.run(url: "https://x/y")
+
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, binDir)
+    }
+
+    /// With no bundled bin directory the variable must be absent, not empty: an empty
+    /// entry in PATH means the current directory, so the script would run whatever
+    /// ./yt-dlp happened to be in the folder the hotkey fired from.
+    func testOmitsCarabinerBinWhenNoneBundled() {
+        let stub = writeStub("echo \"  ✓ ${CARABINER_BIN-ABSENT}\"; exit 0")
+        var runner = GrabRunner(executable: stub)
+        runner.binDirectory = nil
+        let result = runner.run(url: "https://x/y")
+
+        XCTAssertEqual(result.message, "ABSENT")
+    }
 }
