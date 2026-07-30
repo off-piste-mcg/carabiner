@@ -134,19 +134,27 @@ jobs:
           if-no-files-found: error
 
   gallery-dl:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
-      # python.org ships a universal2 framework build; the runner's default Python is
-      # single-arch, and PyInstaller can only emit universal2 from a universal2 Python.
+      # For Python >= 3.11, actions/setup-python's macOS builds are not
+      # compiled from source per-arch — they install python.org's universal2
+      # pkg regardless of which `architecture` is requested, so `arm64` and no
+      # `architecture` resolve to the identical universal2 interpreter. That is
+      # what makes PyInstaller's --target-arch universal2 possible below.
+      # 3.12.11/.12/.13 publish no darwin build at all in actions/python-versions'
+      # manifest, so 3.12.10 is pinned as the newest usable patch.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-          architecture: "x64"   # the macOS setup-python builds are universal2 framework builds
+          python-version: "3.12.10"
 
       - name: Build
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip pyinstaller
+          python -m pip install --upgrade pip
+          # PyInstaller owns the bootloader and all universal2 arch handling
+          # for this artifact, which ends up inside a signed, notarized app —
+          # pin it explicitly rather than letting it float.
+          python -m pip install "pyinstaller==6.21.0"
           python -m pip install "gallery-dl==${{ inputs.gallery_dl_version }}"
           # gallery-dl loads its ~400 extractors by name at runtime, so PyInstaller's
           # static import scan misses all of them. --collect-submodules is mandatory:
@@ -160,14 +168,28 @@ jobs:
         run: |
           set -euo pipefail
           BIN=dist/gallery-dl
-          lipo -archs "$BIN"           # expect: x86_64 arm64
+          # Assert both slices are present — printing lipo -archs alone gates
+          # nothing (it exits 0 on a single-arch binary too).
+          ARCHS="$(lipo -archs "$BIN")"
+          echo "archs: $ARCHS"
+          echo "$ARCHS" | grep -qw arm64 && echo "$ARCHS" | grep -qw x86_64 \
+            || { echo "::error::expected a universal2 (arm64 + x86_64) binary, got: $ARCHS"; exit 1; }
           "$BIN" --version
           # The real smoke test: listing extractors proves --collect-submodules worked.
           # A stripped binary prints a handful; a good one prints hundreds.
-          n="$("$BIN" --list-extractors | grep -c . || true)"
+          #
+          # Run --list-extractors ONCE into a file, then check both conditions
+          # against that file. Piping the binary's output straight into
+          # `grep -qi instagram` under `set -o pipefail` fails deterministically
+          # even on a CORRECT binary: grep exits at the first match, the
+          # producer gets EPIPE, CPython raises BrokenPipeError and exits 120,
+          # and pipefail turns that into a build failure that misdirects you
+          # toward --collect-submodules when the build already succeeded.
+          "$BIN" --list-extractors > extractors.txt
+          n="$(grep -c . extractors.txt || true)"
           echo "extractors: $n"
           [ "$n" -gt 100 ] || { echo "::error::extractors missing — check --collect-submodules"; exit 1; }
-          "$BIN" --list-extractors | grep -qi instagram \
+          grep -qi instagram extractors.txt \
             || { echo "::error::instagram extractor missing"; exit 1; }
 
       - name: Package
@@ -180,3 +202,4 @@ jobs:
         with:
           name: gallery-dl-universal
           path: dist/gallery-dl-*.tar.gz
+          if-no-files-found: error
