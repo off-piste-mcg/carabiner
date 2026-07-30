@@ -99,10 +99,20 @@ the zero-install fallback for anyone who doesn't want the app. Both drive the sa
 
 **Where things are:** `carabiner` (the engine, bash, repo root) · `app/` (the Swift app)
 · `test/` (offline shell tests, no network — `test-path.sh` covers the `CARABINER_BIN`
-resolution order) · `.github/workflows/build-deps.yml` (manual-dispatch CI that builds
+resolution order) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the pinned fetch for the
+bundled binaries) · `.github/workflows/build-deps.yml` (manual-dispatch CI that builds
 the bundled ffmpeg/gallery-dl — see "Where we are / what's next") · `docs/superpowers/specs/`
 (design) · `docs/superpowers/plans/` (implementation plans) · `files/` (historical
 reference only, not part of the tool).
+
+**Building the app with bundled binaries** needs one extra step before `xcodegen`, and it
+is idempotent so it costs nothing to re-run:
+```bash
+./scripts/fetch-deps.sh   # ~42 MB on a cold run, then "✓ (cached)" forever
+```
+Skip it and you get a perfectly working app that quietly uses Homebrew instead — which is
+the whole failure mode gotcha #17 exists to warn about, so check `Resources/bin` is
+actually populated before concluding bundling works.
 
 **The `CARABINER_BIN` contract** is the interface between the two front ends and the
 engine: the app sets it to its `Contents/Resources/bin` directory when a build has
@@ -186,14 +196,23 @@ the fact). Phase 2, bundling the binaries, is **partially done**:
   **That workflow is green as of 2026-07-30** (run 30551341740): it produces a universal
   ffmpeg (`x86_64 arm64`, static, `minos 13.0`) and a universal2 gallery-dl carrying
   3780 extractors. Getting there took three runs and cost two real gotchas — see #18.
-- **Outstanding (tasks 5-7):** pinning the built artifacts as a checksum-verified fetch
-  (so `fetch-deps.sh`, once it exists, downloads a known-good `deps.lock` entry rather
-  than trusting whatever a workflow run happened to produce), actually copying and
-  signing every bundled Mach-O into the app bundle (so `CARABINER_BIN` points at
-  something real instead of an empty/missing directory), and the no-Homebrew
-  verification pass (task 5's fetch and task 6's signing can each look like they worked
-  on a dev machine that has Homebrew installed as a fallback — gotcha #17 is exactly
-  this trap one layer up, and it applies again here). Details in the spec.
+- **Done (tasks 5-6, 2026-07-30):** the artifacts are published as the **`deps-2026.07`**
+  release, and `scripts/deps.lock` + `scripts/fetch-deps.sh` pull them into a gitignored
+  `app/.deps/bin` with the sha256 verified *before* anything is unpacked. `app/project.yml`
+  copies that directory into `Contents/Resources/bin` and signs each binary with the
+  Hardened Runtime plus `app/BundledBinaries.entitlements` (gotchas #19 and #20 — both
+  were earned the hard way here). A build with no `.deps/bin` still works: there is simply
+  no `Resources/bin`, `GrabRunner.binDirectory()` returns nil, `CARABINER_BIN` stays unset
+  and the script falls back to Homebrew exactly as before.
+- **Outstanding (task 7):** the no-Homebrew verification is **half done**. With
+  `brew unlink yt-dlp ffmpeg gallery-dl` in force, the bundled copies were confirmed to be
+  the ones that resolve, and a real 10-bit → `yuv420p` re-encode ran through the bundled
+  ffmpeg. What has **not** been done is an end-to-end grab of an actual Instagram post
+  through the app's hotkey with Homebrew unlinked — that needs a real URL and live
+  cookies, and it is the only thing that exercises the network path. Until that runs,
+  treat bundling as "resolves correctly" rather than "shipped and proven". Also still
+  open: README install instructions for app users (plan task 7 step 5), which are better
+  written once the DMG exists.
 
 ## Working logic (proven — reuse, don't reinvent)
 
@@ -378,6 +397,41 @@ from the URL for "just this slide".
     fail the step when `otool` itself fails — see the comment on it. Related: x264's
     `configure` **aborts** without an assembler rather than falling back to
     `--disable-asm`, and the runners don't ship `nasm`, so the workflow installs it.
+
+19. **Nothing in `Contents/Resources` gets signed for you.** Xcode auto-signs nested code
+    only in `Frameworks`, `PlugIns` and `XPCServices`; a Mach-O in `Resources` is sealed
+    as *data* and left unsigned, and notarization rejects the whole app for it. The
+    bundled binaries are signed by a `postBuildScripts` phase with `--options runtime`,
+    which works because post-build scripts run *before* Xcode's CodeSign step — the same
+    window the iCloud xattr strip uses (gotcha #13). Verify with
+    `codesign -dv <binary> | grep flags` — every one must show `0x10000(runtime)`.
+
+    **Their order matters, and it isn't the obvious one.** The xattr strip must be the
+    **last** post-build script. It was fine as the first while it was the only one, but
+    signing ~90 MB of bundled binaries takes long enough that iCloud's file provider
+    re-stamps the bundle root in that window, and the build dies on detritus that had
+    already been stripped once. Add new post-build scripts *above* the strip, never below.
+
+20. **PyInstaller binaries need `disable-library-validation` — on the binaries, not on the
+    app.** `yt-dlp_macos` and our `gallery-dl` are one-file PyInstaller builds: they unpack
+    their own Python framework and `.so` files to a temp directory and `dlopen` them. Those
+    libraries aren't signed by us, so once the launcher is re-signed with the Hardened
+    Runtime (gotcha #19) library validation refuses to map them and both tools die
+    instantly with *"mapping process and mapped file (non-platform) have different Team
+    IDs"*. The trap is where the entitlement goes: putting
+    `com.apple.security.cs.disable-library-validation` on `Carabiner.app` — the obvious
+    reading, and what the plan originally said — **does nothing**, because yt-dlp and
+    gallery-dl run as *child processes*, and a process is governed by its own signature.
+    Nothing is inherited from the parent. It lives in `app/BundledBinaries.entitlements`
+    and is passed via `--entitlements` when each binary is signed; the app itself does not
+    carry it and shouldn't, since it never loads a foreign library.
+
+    Two smaller teeth on this one. A **double hyphen is illegal inside an XML comment**, so
+    documenting `--options runtime` in that entitlements file makes `codesign` fail with
+    `AMFIUnserializeXML: syntax error near line N` and no hint that it means XML. And the
+    build's post-signing smoke test checks **exit codes, not output**: `ffmpeg` wants
+    `-version` and exits 8 on `--version`, but prints its version banner first, so an
+    output-only check reads as a pass on a tool that just failed.
 
 ## Dependencies
 
