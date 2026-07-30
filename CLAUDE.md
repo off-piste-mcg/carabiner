@@ -183,6 +183,9 @@ the fact). Phase 2, bundling the binaries, is **partially done**:
   source. Building them ourselves is the only option: upstream ships no official macOS
   binary for gallery-dl at all, and no official static ffmpeg build — both projects
   expect you to compile or use a packager (Homebrew, in this repo's own case).
+  **That workflow is green as of 2026-07-30** (run 30551341740): it produces a universal
+  ffmpeg (`x86_64 arm64`, static, `minos 13.0`) and a universal2 gallery-dl carrying
+  3780 extractors. Getting there took three runs and cost two real gotchas — see #18.
 - **Outstanding (tasks 5-7):** pinning the built artifacts as a checksum-verified fetch
   (so `fetch-deps.sh`, once it exists, downloads a known-good `deps.lock` entry rather
   than trusting whatever a workflow run happened to produce), actually copying and
@@ -360,6 +363,21 @@ from the URL for "just this slide".
     the resolution order offline (no network, stubbed binaries) so this doesn't require a
     real grab every time, but it does not substitute for the no-Homebrew check before
     trusting a bundled build.
+
+18. **The build runner's Homebrew leaks into the ffmpeg you ship — pass
+    `--disable-autodetect`.** ffmpeg's `configure` scans the host and links whatever it
+    finds. GitHub's macOS runners carry a Homebrew X11 stack, so a plain
+    `--enable-static` build happily linked `libxcb`, `libX11`, `libXau` and `libXdmcp`
+    for screen-grab devices this tool never uses — producing an "ffmpeg" that runs
+    perfectly on the runner and dies on any Mac without those dylibs, which is the exact
+    failure bundling exists to prevent. `--disable-autodetect` fixes the class rather
+    than the four libraries: only what is explicitly requested gets linked, on any
+    runner, whatever Homebrew happens to have installed. `zlib` is re-enabled explicitly
+    (it lives in `/usr/lib`, so it is a system library, and some demuxers need it).
+    This was caught by the workflow's own `otool -L` gate, which is why that gate must
+    fail the step when `otool` itself fails — see the comment on it. Related: x264's
+    `configure` **aborts** without an assembler rather than falling back to
+    `--disable-asm`, and the runners don't ship `nasm`, so the workflow installs it.
 
 ## Dependencies
 
