@@ -42,6 +42,13 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: "13.0"
         run: |
           set -euo pipefail
+          # x264's configure ABORTS without an assembler ("Found no assembler /
+          # Minimum version is nasm-2.13"); it does not silently fall back to
+          # --disable-asm. The runners don't ship nasm, so install it first or the
+          # build dies before it starts. Log the version: nasm affects the encoder
+          # asm that ends up in the shipped ffmpeg.
+          brew install nasm
+          nasm -v
           # x264 has no tagged releases, so pin an explicit commit — this
           # artifact ends up inside a signed, notarized app and must not float
           # with upstream's master branch. Resolved via `git ls-remote` against
