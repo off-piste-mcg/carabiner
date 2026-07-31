@@ -53,11 +53,33 @@ fi
 exit 0
 STUB
 
-# yt-dlp: writes the file named by -o. Task 6 replaces this with a progress-emitting one.
+# yt-dlp: a *Python* process writing progress to stdout, which is what the real one is.
+# The language matters: CPython block-buffers stdout when it is a pipe, so this stub
+# reproduces the buffering trap rather than papering over it.
 cat > "$BIN/yt-dlp" <<'STUB'
 #!/usr/bin/env bash
 out=""; prev=""
 for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+if [ -n "${CARABINER_TEST_NOVIDEO:-}" ]; then
+  echo "ERROR: No video formats found!" >&2
+  exit 1
+fi
+if [ -n "${CARABINER_TEST_FAIL:-}" ]; then
+  # Leaves a file behind *and* exits non-zero, which is what an interrupted download or a
+  # failed merge/post-process does — `ls "${tmp}".*` matches the partial too. The exit
+  # status is therefore the only reliable signal, and check 9 below is only load-bearing
+  # because of this line: with no file, ig_video's "no source file" guard catches the
+  # failure on its own and check 9 passes even with the exit status thrown away.
+  echo "ERROR: login required" >&2
+  : > "${out/\%(ext)s/mp4}"
+  exit 1
+fi
+python3 -c '
+import sys, time
+for p in ("  0.0%", " 50.0%", "100.0%"):
+    sys.stdout.write("::progress:download:%s\n" % p)
+    time.sleep(0.3)
+'
 : > "${out/\%(ext)s/mp4}"
 exit 0
 STUB
@@ -120,6 +142,43 @@ contains "second item announced" "::progress:item:2:2" "$err"
 # 5. The save marker closes the run.
 err="$(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)"
 contains "save marker emitted" "::progress:save" "$err"
+
+# 6. Percentages reach stderr, and not stdout.
+err="$(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)"
+contains "download percent emitted" "::progress:download: 50.0%" "$err"
+out="$(run 'https://www.instagram.com/reel/ABC123/' 2>/dev/null)"
+lacks "stdout still carries no markers" "::progress:" "$out"
+
+# 7. Progress must arrive LIVE. Without PYTHONUNBUFFERED=1 a Python process writing to a
+#    pipe block-buffers, so every marker lands in one burst when it exits — the ring would
+#    freeze for the whole download and then snap to full, which is the exact symptom this
+#    feature exists to remove. Measured 2026-07-31: 1.7s of output delivered at t=1.7s.
+#    The stub sleeps 0.3s between three markers, so live delivery spans >= ~0.6s.
+first=""; last=""
+while IFS= read -r line; do
+  case "$line" in
+    ::progress:download:*)
+      now="$(python3 -c 'import time; print(int(time.time()*1000))')"
+      [ -z "$first" ] && first="$now"
+      last="$now" ;;
+  esac
+done < <(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)
+if [ -n "$first" ] && [ -n "$last" ] && [ "$((last - first))" -ge 400 ]; then
+  check "progress arrives live, not buffered to the end" "live" "live"
+else
+  check "progress arrives live, not buffered to the end" "spread >= 400ms" "spread $((last - first))ms"
+fi
+
+# 8. Gotcha #4's fallback still works: "No video formats found!" means this is an image
+#    post, and the caller must fall through to gallery-dl. Breaking this breaks every
+#    image post, with no error that points at the pipeline change that caused it.
+out="$(CARABINER_TEST_NOVIDEO=1 run 'https://www.instagram.com/p/ABC123/' 2>/dev/null)"
+contains "no-video falls back to gallery-dl" "✓ " "$out"
+
+# 9. A genuine yt-dlp failure must still fail. pipefail is what carries the exit status
+#    out of the tee pipeline; without it a failed download would look like a success.
+out="$(CARABINER_TEST_FAIL=1 run 'https://www.instagram.com/reel/ABC123/' 2>/dev/null)"; rc=$?
+check "a failing download exits non-zero" "nonzero" "$([ "$rc" -ne 0 ] && echo nonzero || echo "zero")"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

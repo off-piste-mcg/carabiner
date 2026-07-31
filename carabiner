@@ -301,9 +301,32 @@ ig_video() {
   local -a args=(--cookies-from-browser "$BROWSER" -o "${tmp}.%(ext)s")
   [ -n "$slide" ] && args+=(--playlist-items "$slide")
   [ "$silent" -eq 1 ] && args+=(-f "bv")
+  # Ask yt-dlp for the marker format directly rather than screen-scraping its progress bar.
+  # --newline turns the \r-overwritten bar into discrete lines; --progress forces it even
+  # though stdout is a pipe; --progress-delta throttles it to something a 30fps ring can use.
+  args+=(--newline --progress --progress-delta 0.2
+         --progress-template "download:::progress:download:%(progress._percent_str)s")
 
   local log rc
-  log="$(yt-dlp "${args[@]}" "$url" 2>&1)"; rc=$?
+  # Progress has to reach the app *live*, but the whole output is still needed afterwards:
+  # the "no video formats" test below (gotcha #4) reads it to decide whether this was an
+  # image slide. So tee it — everything into `log`, marker lines onward to stderr as they
+  # happen.
+  #
+  # PYTHONUNBUFFERED=1 is load-bearing, not defensive. CPython block-buffers stdout when it
+  # is a pipe, so without it every marker arrives in one burst when yt-dlp exits: measured
+  # 2026-07-31, 1.7s of progress delivered at t=1.7s instead of at 0.0/0.4/0.8/1.2s. The
+  # ring would sit frozen for the whole download and then snap to full — the exact symptom
+  # the ring exists to remove, and it would read as "the creep is broken".
+  #
+  # `rc=$?` is correct here and PIPESTATUS is not needed: `set -uo pipefail` (top of file)
+  # carries yt-dlp's non-zero status out of the pipeline, and `grep` sits in a process
+  # substitution rather than in the pipeline, so its own exit status is not part of it.
+  # That last point is what makes this safe — grep exits 1 when it matches nothing, which
+  # is every image post, and as a pipeline stage that 1 would become yt-dlp's exit code
+  # and take gotcha #4's fallback with it.
+  log="$(PYTHONUNBUFFERED=1 yt-dlp "${args[@]}" "$url" 2>&1 \
+         | tee >(grep --line-buffered '^::progress:' >&2))"; rc=$?
 
   if [ $rc -ne 0 ]; then
     rm -f "${tmp}".* 2>/dev/null
@@ -350,6 +373,10 @@ ig_gallery() {
   # the one place you cannot go and look at the terminal output. gallery-dl already says
   # whether it was a 404, a login wall, a rate limit or a cookie problem; report that.
   local log rc
+  # gallery-dl has no progress output of any kind, so this stage creeps rather than
+  # tracking. Deliberately left as one marker: there is nothing to report until the files
+  # land, and the per-item markers below cover the part that takes the time.
+  progress download
   log="$(gallery-dl "${args[@]}" "$url" 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
     rm -rf "$tmp"
