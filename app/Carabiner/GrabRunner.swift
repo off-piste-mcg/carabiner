@@ -107,6 +107,11 @@ struct GrabRunner {
 
         // The script announces every save on stdout as `  ✓ <what>` — a filename for
         // Instagram, `saved to ~/Downloads` for the YouTube/Pinterest/generic paths.
+        //
+        // A progress marker leaking onto stdout could never be counted here (no `::progress:`
+        // line carries a `✓ ` prefix), so a unit test of that property here cannot fail and
+        // one was deleted for saying nothing. What genuinely holds the property up is that
+        // markers stay off stdout at the source: `test/test-progress.sh` checks 2 and 6.
         let saved = outLines.filter { $0.hasPrefix("✓ ") }.map { String($0.dropFirst(2)) }
         if saved.isEmpty {
             // Exit 0 with nothing announced: the user hit Cancel on the carousel prompt

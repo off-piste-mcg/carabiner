@@ -45,6 +45,13 @@ final class RingAnimator {
     }
 
     func handle(_ event: ProgressEvent) {
+        // Once the ending has started, the run is over and nothing may move the arc again.
+        // This is not just tidiness: on a hard failure `ig_video` dumps its captured log to
+        // stderr, and that log contains every `::progress:download:` line that already went
+        // through `tee`. GrabRunner keeps those out of the failure *reason*, but the stderr
+        // reader still parses them — so without this guard the arc lurches forward at the
+        // exact moment of failure, replaying the download it just lost, and then fades.
+        guard fadeStart == nil else { return }
         model.apply(event, at: Date())
     }
 

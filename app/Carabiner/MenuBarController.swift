@@ -39,8 +39,16 @@ final class MenuBarController: NSObject {
             return
         }
         // Before the notification and before reading the tab: resolving the front tab is
-        // AppleScript on this thread and is itself part of the wait. The ring covers it as
-        // the `resolve` stage — the same reasoning that put showWorking() here.
+        // AppleScript on this thread and is itself part of the wait — the same reasoning
+        // that put showWorking() here.
+        //
+        // The `resolve` band (0 → 5%) does NOT animate, and that is a consequence of this
+        // ordering rather than a bug to chase. `tabReader.resolve()` below is a synchronous
+        // AppleScript call on the main thread, so the ring's 30fps `RunLoop.main` timer
+        // cannot fire until it returns; the arc's first movement is whatever the first
+        // script marker puts it at. The user still gets immediate feedback because
+        // `begin()` draws the shrunk mark and the empty track synchronously, right here.
+        // Do not "fix" this by moving AppleScript off the main thread.
         ring.begin()
         // Before reading the tab, not after: resolve() drives AppleScript on this thread
         // and is itself part of the delay the user is waiting through. Any outcome below
