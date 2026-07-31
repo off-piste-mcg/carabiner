@@ -102,13 +102,4 @@ final class StatusIconRendererTests: XCTestCase {
         XCTAssertLessThan(onRing(below, clock: 0), 0.5, "no arc expected below the epsilon")
         XCTAssertGreaterThan(onRing(above, clock: 0), 0.5, "arc expected above the epsilon")
     }
-
-    /// Out-of-range input must clamp rather than produce an over-swept arc or a NaN angle.
-    func testProgressIsClamped() {
-        let r = renderer()
-        for deg in [0.0, 90.0, 180.0, 270.0] {
-            XCTAssertGreaterThan(onRing(r.busy(progress: 1.5, alpha: 1), clock: deg), 0.5)
-            XCTAssertLessThan(onRing(r.busy(progress: -0.5, alpha: 1), clock: deg), 0.5)
-        }
-    }
 }

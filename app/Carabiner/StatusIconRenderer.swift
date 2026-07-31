@@ -31,6 +31,11 @@ struct StatusIconRenderer {
     func busy(progress: Double, alpha: CGFloat) -> NSImage {
         let side = Self.side, stroke = Self.stroke
         let mark = self.mark
+        // Defensive, and deliberately untested: no input distinguishes this from its absence
+        // at the pixel level. Negative values are already absorbed by the epsilon guard below,
+        // and appendArc traces a complete circle for any sweep past 360°, so a test could only
+        // ever assert something true of both implementations. Callers pass 0...1 today;
+        // this is here so a future one that doesn't cannot produce a NaN angle.
         let clamped = min(1, max(0, progress))
 
         let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
