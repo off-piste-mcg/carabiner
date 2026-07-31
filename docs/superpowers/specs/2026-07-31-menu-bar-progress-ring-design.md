@@ -143,18 +143,33 @@ log="$(yt-dlp "${args[@]}" "$url" 2>&1)"; rc=$?
 and becomes:
 
 ```bash
-log="$(yt-dlp "${args[@]}" "$url" 2>&1 | tee >(grep --line-buffered '^::progress:' >&2))"
-rc=${PIPESTATUS[0]}
+log="$(PYTHONUNBUFFERED=1 yt-dlp "${args[@]}" "$url" 2>&1 \
+       | tee >(grep --line-buffered '^::progress:' >&2))"; rc=$?
 ```
 
-with `--newline --progress-delta 0.2 --progress-template` added to `args` so yt-dlp emits
-the marker format directly rather than being screen-scraped. The shebang is
-`#!/usr/bin/env bash`, so `PIPESTATUS` and process substitution are available.
+with `--newline --progress --progress-delta 0.2 --progress-template` added to `args` so
+yt-dlp emits the marker format directly rather than being screen-scraped.
 
-**This is the change most likely to break something silently.** `rc` now comes from
-`PIPESTATUS[0]` rather than `$?`, and gotcha #4's `return 10` fallback — "no video formats"
-meaning *this is an image, try gallery-dl* — hangs off that exact value. Get it wrong and
-image posts and carousels stop working, with no error that points here.
+**`PYTHONUNBUFFERED=1` is load-bearing, not defensive.** Measured 2026-07-31: a Python
+process writing to a *pipe* block-buffers its stdout, so without it every progress line
+arrives in one burst when the process exits — 1.7s of output delivered at t=1.7s instead of
+at 0.0/0.4/0.8/1.2s. The ring would freeze for the whole download and then snap to 100%,
+which is precisely the symptom this feature exists to remove, and it would read as "the
+creep is broken" rather than as a buffering problem. Both bundled tools are PyInstaller
+CPython builds, so both need it.
+
+**`rc=$?` is correct here and `PIPESTATUS` is not needed** — verified 2026-07-31. `set -uo
+pipefail` at `carabiner:31` makes the pipeline return yt-dlp's non-zero status, and `grep`
+sits in a *process substitution* rather than in the pipeline, so its exit status is not
+part of it. That last point is what makes this safe: `grep` exits 1 when it matches
+nothing, which is every image post, and if it were a genuine pipeline stage that 1 would
+become the script's view of yt-dlp's exit code.
+
+**This is still the change most likely to break something silently.** Gotcha #4's `return
+10` fallback — "no video formats" meaning *this is an image, try gallery-dl* — is decided
+from `rc` and `log`. Break either and image posts and carousels stop working, with no error
+that points here. `pipefail` is now load-bearing for a second reason; removing it would
+make a failed download look like a success.
 
 Second trap, app-side: `GrabRunner.swift:79` takes the last stderr line as the failure
 reason. Unfiltered, a failed grab would report `::progress:download:87.1` instead of what
@@ -175,12 +190,15 @@ injected via `CARABINER_BIN` (the same mechanism `test-path.sh` already uses):
 
 1. `::progress:` lines appear on stderr during a download.
 2. **stdout is byte-identical to the pre-change script** for a successful grab.
-3. A non-zero exit from yt-dlp still surfaces as a failure — i.e. `PIPESTATUS[0]` is
-   actually being read, not `$?` of `grep`.
+3. A non-zero exit from yt-dlp still surfaces as a failure — i.e. `pipefail` is doing its
+   job and `grep`'s no-match exit is not being read as the tool's.
 4. A stubbed "No video formats found!" still produces `return 10` and the gallery-dl
    fallback still runs.
 5. A stubbed tool failure still reports the tool's own last line as the reason, not a
    progress line.
+6. **Progress arrives live, not in a burst at exit.** A stub that emits markers with
+   delays between them must be observed to produce them with those delays intact. Without
+   this assertion the buffering trap above is invisible to every other test in the file.
 
 **`CarabinerTests`** — `ProgressModel` line parsing and band mapping (including: creep
 never crosses its ceiling, the value never decreases, `prompt` freezes); `GrabRunner`
