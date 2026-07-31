@@ -165,6 +165,37 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertEqual(box.all(), [.probe, .download(percent: 50), .save])
     }
 
+    /// `ig_video`'s hard-failure path ends in `echo "$log" >&2`, and that captured log holds
+    /// every `::progress:` line that already went through `tee` — so a failed grab reports
+    /// its whole download a second time. This pins *when* that replay lands: entirely before
+    /// `run` returns the outcome, because `run` only returns once stderr has hit EOF. The
+    /// ring is therefore told "failed" strictly after the last replayed marker, never during
+    /// the ending. Anything that let stderr delivery outlive the outcome would put a dead
+    /// grab's markers into a ring that has already begun to fade.
+    func testFailureDumpMarkersArriveBeforeTheOutcome() {
+        let stub = writeStub("""
+        echo '::progress:download:  20.0%' 1>&2
+        echo '::progress:download:  60.0%' 1>&2
+        echo '::progress:download:  20.0%' 1>&2
+        echo '::progress:download:  60.0%' 1>&2
+        echo '✗ HTTP Error 403: Forbidden' 1>&2
+        exit 1
+        """)
+        let box = EventBox()
+        var runner = GrabRunner(executable: stub)
+        runner.onProgress = { box.add($0) }
+        let result = runner.run(url: "https://x/y")
+        let atReturn = box.all()
+
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "HTTP Error 403: Forbidden")
+        // All four — the replay reaches the app rather than being filtered out. If this ever
+        // drops to two, the premise above is gone and so is the reason for the assertion below.
+        XCTAssertEqual(atReturn.count, 4, "the failure dump's replayed markers should reach onProgress")
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(box.all().count, atReturn.count, "a progress event arrived after run() returned")
+    }
+
     /// The failure reason is the last stderr line. Progress markers are stderr too, so
     /// without filtering a failed grab would banner "::progress:download:87.1" instead of
     /// what gallery-dl actually said — destroying the diagnostics that exist precisely

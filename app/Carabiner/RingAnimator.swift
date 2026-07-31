@@ -46,11 +46,23 @@ final class RingAnimator {
 
     func handle(_ event: ProgressEvent) {
         // Once the ending has started, the run is over and nothing may move the arc again.
-        // This is not just tidiness: on a hard failure `ig_video` dumps its captured log to
-        // stderr, and that log contains every `::progress:download:` line that already went
-        // through `tee`. GrabRunner keeps those out of the failure *reason*, but the stderr
-        // reader still parses them — so without this guard the arc lurches forward at the
-        // exact moment of failure, replaying the download it just lost, and then fades.
+        //
+        // Defensive, not load-bearing — it cannot fire today, and the comment here used to
+        // claim otherwise. The claim was that a hard failure lurches the arc: `ig_video`
+        // ends in `echo "$log" >&2`, and that captured log holds every
+        // `::progress:download:` line that already went through `tee`, so a failed grab
+        // really does report its whole download a second time. What that story missed is
+        // *when* the replay lands. `GrabRunner.run` returns only after stderr hits EOF, so
+        // every replayed marker is already enqueued on the main queue before
+        // `MenuBarController` enqueues `finish(success:)` — and `finish` is the only thing
+        // that sets `fadeStart` on the failure path. FIFO therefore guarantees this guard
+        // is open when the replay arrives. `testFailureDumpMarkersArriveBeforeTheOutcome`
+        // pins that ordering.
+        //
+        // What actually makes the replay harmless is `ProgressModel.highWater`: the replayed
+        // values are ones already applied, and the arc is clamped non-decreasing, so
+        // re-applying them targets exactly where it already is. Keep this line as insurance
+        // against a future reordering; do not re-promote it to a fix for the lurch.
         guard fadeStart == nil else { return }
         model.apply(event, at: Date())
     }
