@@ -55,6 +55,9 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
     over notifications with its own branded banner. If you ever see *two* banners, or an
     unbranded one while using the app, the app is calling a copy of this script that
     predates that gate.
+  - **Progress**: reports its stage on stderr as `::progress:` markers — always on, no
+    flag to disable them. stdout is unchanged, so the Shortcut path (which only reads
+    stdout) is unaffected; the app is the only consumer, via `GrabRunner`.
 - **`setup.sh`** — installs the three deps via Homebrew, links `carabiner`/`clip`/`crab`.
 - **`README.md`** — team setup + the macOS Shortcut wiring.
 - **Shipped:** public repo at `github.com/off-piste-mcg/carabiner` (clone + `./setup.sh`).
@@ -72,6 +75,9 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   front browser tab via AppleScript, shells out to this repo's `carabiner` script, and
   posts a **branded** notification with the filename (or "N files"). Swift owns the
   experience; bash still owns the grabbing — the app never re-implements the pipeline.
+  While a grab runs, the status item draws a progress ring around the mark (which shrinks
+  to 10pt for the duration) — driven by `::progress:` markers the script writes to stderr,
+  not by a guess. See `docs/superpowers/specs/2026-07-31-menu-bar-progress-ring-design.md`.
   Built with XcodeGen (`xcodegen generate` from `app/`; the `.xcodeproj` and the generated
   `Info.plist` are gitignored — `project.yml` is the single source of truth). **Requires a
   development code signature to work at all — see gotcha #11.** Build with:
@@ -99,11 +105,12 @@ the zero-install fallback for anyone who doesn't want the app. Both drive the sa
 
 **Where things are:** `carabiner` (the engine, bash, repo root) · `app/` (the Swift app)
 · `test/` (offline shell tests, no network — `test-path.sh` covers the `CARABINER_BIN`
-resolution order) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the pinned fetch for the
-bundled binaries) · `.github/workflows/build-deps.yml` (manual-dispatch CI that builds
-the bundled ffmpeg/gallery-dl — see "Where we are / what's next") · `docs/superpowers/specs/`
-(design) · `docs/superpowers/plans/` (implementation plans) · `files/` (historical
-reference only, not part of the tool).
+resolution order, `test/test-progress.sh` covers the progress markers offline (stubbed
+tools via `CARABINER_BIN`, no network)) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the
+pinned fetch for the bundled binaries) · `.github/workflows/build-deps.yml`
+(manual-dispatch CI that builds the bundled ffmpeg/gallery-dl — see "Where we are /
+what's next") · `docs/superpowers/specs/` (design) · `docs/superpowers/plans/`
+(implementation plans) · `files/` (historical reference only, not part of the tool).
 
 **Building the app with bundled binaries** needs one extra step before `xcodegen`, and it
 is idempotent so it costs nothing to re-run:
@@ -499,6 +506,37 @@ from the URL for "just this slide".
     `CARABINER_NO_NOTIFY` so the app never doubles up. This matters beyond polish: until
     something appears, a slow grab and a hotkey that never fired are indistinguishable,
     and a silently-lost chord is a real failure mode (gotcha #14).
+
+23. **A Python tool writing to a pipe block-buffers, so "live" output is not live.**
+    `yt-dlp` and `gallery-dl` are CPython (PyInstaller) builds. When their stdout is a
+    pipe rather than a terminal, CPython block-buffers it — so the progress markers the
+    menu-bar ring depends on all arrive in a single burst when the process *exits*. The
+    ring would sit frozen for a whole download and then snap to full, which is precisely
+    the symptom the ring exists to remove — and it reads as "the creep is broken", not as
+    buffering, so it sends you to the wrong file. `ig_video` sets `PYTHONUNBUFFERED=1` on
+    the yt-dlp call for this reason and no other. Measured against the finished code:
+    three markers written 0.4s apart show **629ms of spread** with `PYTHONUNBUFFERED=1`
+    set, and **45ms** with it unset — and that 45ms is not evidence the unset case is
+    nearly fine; it isn't zero only because the test's own clock spawns a `python3`
+    process per line, so the noise floor of the assertion is created by the very thing it
+    measures. `test/test-progress.sh` checks this spread rather than marker presence,
+    because presence passes either way; it is the only assertion in the suite that can
+    see this.
+
+    A second, smaller tooth from the same change: `rc=$?` after
+    `log="$(yt-dlp … | tee >(grep …))"` is correct, and `PIPESTATUS` is not needed.
+    `set -uo pipefail` carries yt-dlp's status out of the pipeline, and `grep` lives in a
+    *process substitution* rather than a pipeline stage — which is load-bearing, because
+    `grep` exits 1 when it matches nothing (every image post), and as a real stage that 1
+    would become yt-dlp's exit code and silently take gotcha #4's image fallback with it.
+
+    **A pre-existing latent issue, found during this work's review — not introduced by
+    it, and not currently reachable.** `ig_video` picks its downloaded file with
+    `head -n1` of an alphabetical `ls "${tmp}".*`. If a per-format intermediate ever
+    survives a successful merge (`.f140.m4a`, `.f399.mp4`), it sorts before the merged
+    `.mp4` and would win. On the failure path the function returns before that lookup
+    runs, so there is no live bug today — but the lookup is order-dependent in a way
+    nothing guarantees, and is worth tightening the next time that function is touched.
 
 ## Dependencies
 
