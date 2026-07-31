@@ -121,6 +121,23 @@ final class ProgressModelTests: XCTestCase {
         XCTAssertGreaterThan(m.target(at: at(600)), 0.95)
     }
 
+    /// `ig_gallery` emits a bare `::progress:download` *before* gallery-dl runs, and only
+    /// afterwards announces `item:i:n` per file. So by the time the first item arrives the
+    /// creep has already banked most of the unsliced download band (0.12…0.75) — while the
+    /// early slices of an n-way subdivision have ceilings far *below* that. Anchoring the
+    /// slices at the fixed 0.12 therefore put items 1…7 of a 12-item carousel entirely
+    /// underneath the high-water mark, and the non-decreasing clamp pinned the arc for the
+    /// whole of the item loop, which is exactly where a mixed carousel spends its seconds.
+    func testItemsAfterUnslicedDownloadCanStillAdvance() {
+        var m = ProgressModel(start: t0)
+        m.apply(.download(percent: nil), at: t0)
+        _ = m.target(at: at(2))                 // creep banks most of 0.12…0.75
+
+        m.apply(.item(index: 1, total: 12), at: at(2))
+        let atItem = m.target(at: at(2))
+        XCTAssertGreaterThan(m.target(at: at(4)), atItem)
+    }
+
     func testFinishGoesToFull() {
         var m = ProgressModel(start: t0)
         m.apply(.download(percent: 10), at: t0)

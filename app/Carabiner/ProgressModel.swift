@@ -90,6 +90,18 @@ struct ProgressModel {
     private var downloadPercent: Double?
     private var convertMode: ConvertMode = .encode
     private var slice: Slice?
+    /// Where the per-item slices start. Not the fixed `itemLo`: `ig_gallery` announces a
+    /// bare `download` *before* gallery-dl runs and only announces `item:i:n` once files
+    /// start landing, so the unsliced download band has already crept most of the way to
+    /// 0.75 by then. Subdividing from 0.12 would put the early slices' ceilings below the
+    /// high-water mark, and the non-decreasing clamp would freeze the arc through most of
+    /// the item loop — which is precisely where a mixed carousel spends its re-encode time.
+    /// Anchoring at the value already reached keeps the arc moving *and* keeps it
+    /// non-decreasing by construction.
+    ///
+    /// Fixed on the FIRST item and never recomputed: re-deriving it per item would shift
+    /// every slice boundary underneath the arc mid-carousel.
+    private var slicesBegin: Double?
     /// The value is clamped non-decreasing: yt-dlp restarts its percentage when it moves
     /// from the video stream to the audio stream, and an arc that retreats reads as an error.
     private var highWater: Double = 0
@@ -109,6 +121,7 @@ struct ProgressModel {
             convertMode = mode
             enterIfChanged(.convert, at: now)
         case .item(let i, let n):
+            if slicesBegin == nil { slicesBegin = max(Self.itemLo, highWater) }
             slice = Slice(index: i, total: n)
             // A new item always restarts the download stage, even from the download stage —
             // its creep and its percentage belong to the new slice, not the old one.
@@ -167,8 +180,9 @@ struct ProgressModel {
         let base = Self.band(stage)
         guard let slice, slice.total > 1,
               stage == .download || stage == .convert else { return base }
-        let width = (Self.itemHi - Self.itemLo) / Double(slice.total)
-        let lo = Self.itemLo + width * Double(slice.index - 1)
+        let begin = slicesBegin ?? Self.itemLo
+        let width = (Self.itemHi - begin) / Double(slice.total)
+        let lo = begin + width * Double(slice.index - 1)
         let split = lo + width * Self.downloadShareOfSlice
         return stage == .download ? (lo, split) : (split, lo + width)
     }
