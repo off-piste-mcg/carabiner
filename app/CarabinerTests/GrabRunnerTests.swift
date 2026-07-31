@@ -139,4 +139,56 @@ final class GrabRunnerTests: XCTestCase {
 
         XCTAssertEqual(result.message, "ABSENT")
     }
+
+    /// Thread-safe collector: onProgress fires on GrabRunner's own background queue.
+    private final class EventBox {
+        private let lock = NSLock()
+        private var events: [ProgressEvent] = []
+        func add(_ e: ProgressEvent) { lock.lock(); events.append(e); lock.unlock() }
+        func all() -> [ProgressEvent] { lock.lock(); defer { lock.unlock() }; return events }
+    }
+
+    func testProgressEventsAreReportedInOrder() {
+        let stub = writeStub("""
+        echo '::progress:probe' 1>&2
+        echo '::progress:download:  50.0%' 1>&2
+        echo '::progress:save' 1>&2
+        echo '  ✓ ABC_fixed.mp4'
+        exit 0
+        """)
+        let box = EventBox()
+        var runner = GrabRunner(executable: stub)
+        runner.onProgress = { box.add($0) }
+        let result = runner.run(url: "https://x/y")
+
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(box.all(), [.probe, .download(percent: 50), .save])
+    }
+
+    /// The failure reason is the last stderr line. Progress markers are stderr too, so
+    /// without filtering a failed grab would banner "::progress:download:87.1" instead of
+    /// what gallery-dl actually said — destroying the diagnostics that exist precisely
+    /// because a notification is the one place you cannot go and read the terminal.
+    func testProgressLineIsNeverTheFailureReason() {
+        let stub = writeStub("""
+        echo '✗ login required — cookies expired?' 1>&2
+        echo '::progress:download:  87.1%' 1>&2
+        exit 1
+        """)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "login required — cookies expired?")
+    }
+
+    /// Markers must not reach the success message either — stdout is the ✓ channel, but a
+    /// marker mistakenly echoed there must not be counted as a saved file.
+    func testProgressMarkersDoNotCountAsSaves() {
+        let stub = writeStub("""
+        echo '::progress:download:  10.0%' 1>&2
+        echo '  ✓ ABC_fixed.mp4'
+        exit 0
+        """)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertEqual(result.message, "ABC_fixed.mp4")
+    }
 }

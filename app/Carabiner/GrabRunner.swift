@@ -23,6 +23,10 @@ struct GrabRunner {
     /// case CARABINER_BIN is left unset entirely and the script uses Homebrew.
     var binDirectory: String? = GrabRunner.binDirectory()
 
+    /// Called once per `::progress:` line the script writes to stderr, in order, on a
+    /// background queue. Hop to the main queue before touching any UI.
+    var onProgress: ((ProgressEvent) -> Void)?
+
     static func bundledExecutable() -> String? {
         Bundle.main.url(forResource: "carabiner", withExtension: nil)?.path
     }
@@ -68,12 +72,32 @@ struct GrabRunner {
         let group = DispatchGroup()
         let queue = DispatchQueue.global(qos: .userInitiated)
         queue.async(group: group) { outData = outPipe.fileHandleForReading.readDataToEndOfFile() }
-        queue.async(group: group) { errData = errPipe.fileHandleForReading.readDataToEndOfFile() }
+        // stderr is read incrementally rather than to EOF: progress is only useful while
+        // the grab is still running, and readDataToEndOfFile would deliver every marker at
+        // once, after the thing they describe had already finished.
+        queue.async(group: group) {
+            let handle = errPipe.fileHandleForReading
+            var buffer = LineBuffer()
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                errData.append(chunk)
+                for line in buffer.append(chunk) {
+                    if let event = ProgressParser.parse(line) { self.onProgress?(event) }
+                }
+            }
+            if let last = buffer.flush(), let event = ProgressParser.parse(last) {
+                self.onProgress?(event)
+            }
+        }
         group.wait()
         proc.waitUntilExit()
 
         let outLines = Self.lines(String(data: outData, encoding: .utf8) ?? "")
+        // Markers are stderr too. Left in, the last one would become the failure message —
+        // and a grab that died on expired cookies would report a download percentage.
         let errLines = Self.lines(String(data: errData, encoding: .utf8) ?? "")
+            .filter { !$0.hasPrefix(ProgressParser.marker) }
 
         guard proc.terminationStatus == 0 else {
             let last = (outLines + errLines).last ?? ""
