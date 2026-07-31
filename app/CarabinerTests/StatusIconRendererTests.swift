@@ -44,9 +44,13 @@ final class StatusIconRendererTests: XCTestCase {
         return rep.colorAt(x: px, y: py)?.alphaComponent ?? 0
     }
 
-    /// Guards the sampler itself. A full circle must be on the arc at every cardinal point
-    /// and an empty one at none — if this fails, `onRing` is addressing the wrong pixels
-    /// and every assertion below it is meaningless rather than wrong.
+    /// Guards the sampler itself, and doubles as a canary for two unrelated failure modes.
+    /// A full circle must be on the arc at every cardinal point and an empty one at none —
+    /// if this fails, either `onRing` is addressing the wrong pixels, or `appendArc` hit its
+    /// degenerate full-sweep case (progress 1's start/end angles are congruent mod 360, and
+    /// that renders a complete circle or nothing at all depending on `clockwise` — see
+    /// `testEpsilonBoundaryDrawsNothingBelowAndSomethingAbove`'s doc comment). Both are worth
+    /// checking if this trips; it can't tell you which on its own.
     func testRingSamplerFindsAFullCircleAndNotAnEmptyOne() {
         let r = renderer()
         let full = r.busy(progress: 1, alpha: 1)
@@ -81,7 +85,30 @@ final class StatusIconRendererTests: XCTestCase {
     /// A missing asset must not crash the menu bar — it draws the ring and no mark.
     func testSurvivesAMissingMark() {
         let r = StatusIconRenderer(mark: nil)
-        XCTAssertEqual(r.busy(progress: 0.5, alpha: 1).size, NSSize(width: 22, height: 22))
+        let image = r.busy(progress: 0.5, alpha: 1)
+        XCTAssertEqual(image.size, NSSize(width: 22, height: 22))
+        XCTAssertTrue(image.isTemplate)
         XCTAssertNil(r.idle())
+    }
+
+    /// The `progress > 0.002` guard exists to avoid asking appendArc for a degenerate
+    /// zero-length sweep. That family of angles is known to behave oddly — at progress 1 a
+    /// full-turn arc draws a complete circle clockwise and *nothing* anticlockwise — so the
+    /// guard's boundary is worth pinning rather than trusting.
+    func testEpsilonBoundaryDrawsNothingBelowAndSomethingAbove() {
+        let r = renderer()
+        let below = r.busy(progress: 0.001, alpha: 1)
+        let above = r.busy(progress: 0.02, alpha: 1)
+        XCTAssertLessThan(onRing(below, clock: 0), 0.5, "no arc expected below the epsilon")
+        XCTAssertGreaterThan(onRing(above, clock: 0), 0.5, "arc expected above the epsilon")
+    }
+
+    /// Out-of-range input must clamp rather than produce an over-swept arc or a NaN angle.
+    func testProgressIsClamped() {
+        let r = renderer()
+        for deg in [0.0, 90.0, 180.0, 270.0] {
+            XCTAssertGreaterThan(onRing(r.busy(progress: 1.5, alpha: 1), clock: deg), 0.5)
+            XCTAssertLessThan(onRing(r.busy(progress: -0.5, alpha: 1), clock: deg), 0.5)
+        }
     }
 }
