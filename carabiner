@@ -313,11 +313,19 @@ ig_video() {
   # image slide. So tee it — everything into `log`, marker lines onward to stderr as they
   # happen.
   #
-  # PYTHONUNBUFFERED=1 is load-bearing, not defensive. CPython block-buffers stdout when it
-  # is a pipe, so without it every marker arrives in one burst when yt-dlp exits: measured
-  # 2026-07-31, 1.7s of progress delivered at t=1.7s instead of at 0.0/0.4/0.8/1.2s. The
-  # ring would sit frozen for the whole download and then snap to full — the exact symptom
-  # the ring exists to remove, and it would read as "the creep is broken".
+  # `--newline` above is the flag that makes any of this work — see gotcha #23. yt-dlp
+  # rewrites one progress line with `\r`, and `grep --line-buffered` only ever emits whole
+  # lines, so without it zero markers reach the app for the entire download.
+  #
+  # PYTHONUNBUFFERED=1, by contrast, is purely defensive and is kept only because it costs
+  # nothing. CPython does block-buffer a piped stdout, but yt-dlp calls `out.flush()` on
+  # every progress write, so that buffering never applies: measured 2026-07-31 against the
+  # real bundled binary through this exact pipeline, markers arrive at the same times with
+  # it set and with `env -u PYTHONUNBUFFERED` (0.00/0.35/0.64/1.41/2.49/3.09s either way).
+  # An earlier comment here called it load-bearing on the strength of a 1.7s measurement
+  # that was of the *test stub* — a bare `python3 -c` that never flushed — not of yt-dlp.
+  # It stays as insurance against a future yt-dlp that stops flushing; do not promote it
+  # back to load-bearing, and do not delete `--newline` thinking this covers for it.
   #
   # `rc=$?` is correct here and PIPESTATUS is not needed: `set -uo pipefail` (top of file)
   # carries yt-dlp's non-zero status out of the pipeline, and `grep` sits in a process
@@ -525,6 +533,12 @@ case "$PLATFORM" in
     esac
     ;;
 
+  # No progress markers on any of the three branches below — deliberate, and recorded so it
+  # doesn't get read as a broken ring (gotcha #23). Each is a single-shot yt-dlp call with
+  # no progress template and no tee/grep pipeline, so the ring stays at the resolve stage's
+  # 5% ceiling for the whole download and then jumps when `progress save` fires. Wiring them
+  # up means giving each the ig_video treatment; Instagram is what this tool is for, so that
+  # cost hasn't been paid yet.
   youtube)
     # Prefer QuickTime-friendly H.264/AAC; caps effectively at 1080p (4k is vp9/av1).
     yt-dlp --cookies-from-browser "$BROWSER" \

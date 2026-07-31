@@ -507,21 +507,52 @@ from the URL for "just this slide".
     something appears, a slow grab and a hotkey that never fired are indistinguishable,
     and a silently-lost chord is a real failure mode (gotcha #14).
 
-23. **A Python tool writing to a pipe block-buffers, so "live" output is not live.**
-    `yt-dlp` and `gallery-dl` are CPython (PyInstaller) builds. When their stdout is a
-    pipe rather than a terminal, CPython block-buffers it — so the progress markers the
-    menu-bar ring depends on all arrive in a single burst when the process *exits*. The
-    ring would sit frozen for a whole download and then snap to full, which is precisely
-    the symptom the ring exists to remove — and it reads as "the creep is broken", not as
-    buffering, so it sends you to the wrong file. `ig_video` sets `PYTHONUNBUFFERED=1` on
-    the yt-dlp call for this reason and no other. Measured against the finished code:
-    three markers written 0.4s apart show **629ms of spread** with `PYTHONUNBUFFERED=1`
-    set, and **45ms** with it unset — and that 45ms is not evidence the unset case is
-    nearly fine; it isn't zero only because the test's own clock spawns a `python3`
-    process per line, so the noise floor of the assertion is created by the very thing it
-    measures. `test/test-progress.sh` checks this spread rather than marker presence,
-    because presence passes either way; it is the only assertion in the suite that can
-    see this.
+23. **`--newline` is what makes progress live — NOT `PYTHONUNBUFFERED`. This entry
+    previously said the opposite, and that was measured wrong.** Corrected 2026-07-31.
+
+    The claim recorded here was that yt-dlp block-buffers its piped stdout like any
+    CPython process, so `PYTHONUNBUFFERED=1` on the yt-dlp call was load-bearing and
+    without it every marker would land in one burst at exit. It is false. yt-dlp calls
+    `out.flush()` on every progress write, so CPython's pipe buffering never gets a
+    chance to apply. Measured against the **real bundled binary** through the exact
+    `tee`/`grep` pipeline in `ig_video`, markers arrive at the same moments either way:
+    with `PYTHONUNBUFFERED=1` **0.00 / 0.35 / 0.64 / 1.41 / 2.49 / 3.09s**, and with
+    `env -u PYTHONUNBUFFERED` the same **0.00 / 0.35 / 0.64 / 1.41 / 2.49 / 3.09s**.
+
+    **How the wrong fact got recorded, because that is the reusable part:** the original
+    "1.7s of output delivered at t=1.7s" was measured against `test/test-progress.sh`'s
+    own yt-dlp *stub* — a bare `python3 -c` loop that never flushed — not against yt-dlp.
+    The stub buffered, the real tool does not, and the test dutifully confirmed a property
+    of the test. A stub that differs from the tool in exactly the dimension under
+    measurement will manufacture whatever conclusion you are looking for. The stub now
+    flushes, like the tool it stands in for. (Reproduce the mechanism in ten seconds:
+    three `sys.stdout.write` + `flush()` lines 0.3s apart, piped, with
+    `env -u PYTHONUNBUFFERED`, arrive **0.31s apart**; drop the `flush()` and the same
+    three arrive **0.02s apart**, i.e. all at exit.)
+
+    **What is actually load-bearing is `--newline`.** yt-dlp writes its progress bar with
+    `\r`, overwriting one line in place, and `grep --line-buffered` emits whole *lines*
+    only — so a `\r`-only stream produces no line at all until EOF. Verified by deleting
+    `--newline` while keeping `PYTHONUNBUFFERED=1`: **zero** discrete markers reach the
+    app for the whole download, and the ring sits frozen and then snaps. That is the same
+    symptom the old entry blamed on buffering, which is why the mis-attribution survived
+    — both stories predict a frozen ring, and only one of them is the cause.
+
+    `PYTHONUNBUFFERED=1` stays in `ig_video` anyway: it is free, and it is insurance
+    against a future yt-dlp that stops flushing. It is defensive, not load-bearing, and
+    the comment there says so. Do not delete `--newline` on the strength of it.
+
+    `test/test-progress.sh` now checks the number of *discrete* marker lines (three), not
+    just their presence: a substring check passes either way, because the `\r`-joined blob
+    still contains `::progress:download: 50.0%` inside it. The liveness/spread check is
+    kept — it is a true assertion about live delivery — but it was attributing the cause
+    to the wrong mechanism. Both fail when `--newline` is removed (1 line, 0ms spread).
+
+    **Scope, recorded so nobody reads the ring as broken:** only the Instagram video path
+    reports download percentages. The YouTube, Pinterest and generic branches call yt-dlp
+    as a single-shot command with no progress template and no `tee` pipeline, so the ring
+    stays in `resolve` for the whole download and then jumps at `progress save`. That is
+    an Instagram-first scope call, not a bug.
 
     A second, smaller tooth from the same change: `rc=$?` after
     `log="$(yt-dlp … | tee >(grep …))"` is correct, and `PIPESTATUS` is not needed.

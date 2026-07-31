@@ -53,13 +53,23 @@ fi
 exit 0
 STUB
 
-# yt-dlp: a *Python* process writing progress to stdout, which is what the real one is.
-# The language matters: CPython block-buffers stdout when it is a pipe, so this stub
-# reproduces the buffering trap rather than papering over it.
+# yt-dlp: a Python process writing progress to stdout, which is what the real one is — and,
+# like the real one, it *flushes every progress write*. The earlier version of this stub did
+# not, which made it block-buffer and produced the measurement that wrongly convinced us
+# PYTHONUNBUFFERED=1 was load-bearing (gotcha #23). A stub that buffers when the tool it
+# stands in for does not is measuring itself.
+#
+# What the stub does model is the flag that actually matters: real yt-dlp overwrites one
+# progress line with `\r` unless `--newline` is passed, and `grep --line-buffered` never
+# emits a line for `\r`-terminated output. So this honours --newline in its argv.
 cat > "$BIN/yt-dlp" <<'STUB'
 #!/usr/bin/env bash
-out=""; prev=""
-for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+out=""; prev=""; newline=0
+for a in "$@"; do
+  [ "$prev" = "-o" ] && out="$a"
+  [ "$a" = "--newline" ] && newline=1
+  prev="$a"
+done
 if [ -n "${CARABINER_TEST_NOVIDEO:-}" ]; then
   echo "ERROR: No video formats found!" >&2
   exit 1
@@ -74,11 +84,16 @@ if [ -n "${CARABINER_TEST_FAIL:-}" ]; then
   : > "${out/\%(ext)s/mp4}"
   exit 1
 fi
-python3 -c '
-import sys, time
+CARABINER_STUB_NEWLINE="$newline" python3 -c '
+import os, sys, time
+# Without --newline the real tool rewrites one line in place; with it, one line per update.
+end = "\n" if os.environ["CARABINER_STUB_NEWLINE"] == "1" else "\r"
 for p in ("  0.0%", " 50.0%", "100.0%"):
-    sys.stdout.write("::progress:download:%s\n" % p)
+    sys.stdout.write("::progress:download:%s%s" % (p, end))
+    sys.stdout.flush()
     time.sleep(0.3)
+sys.stdout.write("[download] 100% of 1.00MiB\n")
+sys.stdout.flush()
 '
 : > "${out/\%(ext)s/mp4}"
 exit 0
@@ -154,10 +169,22 @@ contains "download percent emitted" "::progress:download: 50.0%" "$err"
 out="$(run 'https://www.instagram.com/reel/ABC123/' 2>/dev/null)"
 lacks "stdout still carries no markers" "::progress:" "$out"
 
-# 7. Progress must arrive LIVE. Without PYTHONUNBUFFERED=1 a Python process writing to a
-#    pipe block-buffers, so every marker lands in one burst when it exits — the ring would
-#    freeze for the whole download and then snap to full, which is the exact symptom this
-#    feature exists to remove. Measured 2026-07-31: 1.7s of output delivered at t=1.7s.
+# 6b. `--newline` is the flag the whole progress pipeline hangs on. yt-dlp writes its
+#     progress bar with `\r` and overwrites it in place; `grep --line-buffered` only ever
+#     emits whole *lines*, so without --newline the three updates reach the app as a single
+#     unparseable blob at EOF — the ring would sit still and then jump. Counting discrete
+#     marker lines is what makes this visible: substring checks (6 above) pass either way,
+#     because the blob still contains "::progress:download: 50.0%" between its \r's.
+#     Verified failable 2026-07-31 by deleting --newline from ig_video's args: 1 line, not 3.
+lines="$(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null \
+         | grep -c '^::progress:download:' | tr -d ' ')"
+check "yt-dlp progress arrives as discrete lines (--newline)" "3" "$lines"
+
+# 7. Progress must arrive LIVE — the markers have to reach the app while the download is
+#    still running, not in one burst at the end, or the ring freezes and then snaps to full.
+#    This asserts the delivery, not its cause: the cause is --newline plus grep's line
+#    buffering (check 6b), NOT Python's pipe buffering, which yt-dlp defeats by flushing
+#    every progress write (gotcha #23 — this check was previously mis-attributed).
 #    The stub sleeps 0.3s between three markers, so live delivery spans >= ~0.6s.
 #    The threshold lives in one variable and is interpolated into both the comparison and
 #    the failure label — hardcoding the label separately makes a raised threshold print a

@@ -150,13 +150,21 @@ log="$(PYTHONUNBUFFERED=1 yt-dlp "${args[@]}" "$url" 2>&1 \
 with `--newline --progress --progress-delta 0.2 --progress-template` added to `args` so
 yt-dlp emits the marker format directly rather than being screen-scraped.
 
-**`PYTHONUNBUFFERED=1` is load-bearing, not defensive.** Measured 2026-07-31: a Python
-process writing to a *pipe* block-buffers its stdout, so without it every progress line
-arrives in one burst when the process exits — 1.7s of output delivered at t=1.7s instead of
-at 0.0/0.4/0.8/1.2s. The ring would freeze for the whole download and then snap to 100%,
-which is precisely the symptom this feature exists to remove, and it would read as "the
-creep is broken" rather than as a buffering problem. Both bundled tools are PyInstaller
-CPython builds, so both need it.
+**`--newline` is the load-bearing flag — corrected 2026-07-31.** This passage originally
+said `PYTHONUNBUFFERED=1` was load-bearing, on the strength of a measurement showing 1.7s
+of output delivered at t=1.7s. That measurement was of `test-progress.sh`'s **yt-dlp stub**
+— a bare `python3 -c` that never flushed — not of yt-dlp. Re-measured against the real
+bundled binary through this exact pipeline, markers arrive identically with
+`PYTHONUNBUFFERED=1` and with `env -u PYTHONUNBUFFERED`: 0.00/0.35/0.64/1.41/2.49/3.09s
+both ways, because yt-dlp flushes on every progress write and CPython's pipe buffering
+therefore never applies.
+
+What the pipeline actually depends on is `--newline`. yt-dlp rewrites one progress line
+with `\r`, and `grep --line-buffered` only emits whole *lines*, so without it no marker
+reaches the app until EOF — verified by deleting it while keeping `PYTHONUNBUFFERED=1`:
+zero discrete markers for the whole download. Both stories predict a frozen ring, which is
+why the wrong one survived. `PYTHONUNBUFFERED=1` stays as free insurance against a future
+yt-dlp that stops flushing; it is defensive only. See gotcha #23.
 
 **`rc=$?` is correct here and `PIPESTATUS` is not needed** — verified 2026-07-31. `set -uo
 pipefail` at `carabiner:31` makes the pipeline return yt-dlp's non-zero status, and `grep`
@@ -197,8 +205,16 @@ injected via `CARABINER_BIN` (the same mechanism `test-path.sh` already uses):
 5. A stubbed tool failure still reports the tool's own last line as the reason, not a
    progress line.
 6. **Progress arrives live, not in a burst at exit.** A stub that emits markers with
-   delays between them must be observed to produce them with those delays intact. Without
-   this assertion the buffering trap above is invisible to every other test in the file.
+   delays between them must be observed to produce them with those delays intact.
+7. **Markers arrive as discrete lines** — three of them, not one `\r`-joined blob. This is
+   the check that sees `--newline`; a substring check passes either way, because the blob
+   still contains `::progress:download: 50.0%` between its carriage returns. The stub
+   honours `--newline` in its argv and flushes every write, like the real tool.
+
+**Scope: only the Instagram video path reports percentages.** The YouTube, Pinterest and
+generic branches are single-shot `yt-dlp` calls with no progress template and no `tee`
+pipeline, so the ring stays in `resolve` for the whole download and jumps at `progress
+save`. Instagram-first by design, not a defect.
 
 **`CarabinerTests`** — `ProgressModel` line parsing and band mapping (including: creep
 never crosses its ceiling, the value never decreases, `prompt` freezes); `GrabRunner`
