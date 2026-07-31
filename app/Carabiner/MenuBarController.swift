@@ -8,25 +8,16 @@ final class MenuBarController: NSObject {
     /// Phase 2 turns it into a picker.
     private static let browser: Browser = .chrome
     private let tabReader = TabReader(browser: MenuBarController.browser)
-    private let runner = GrabRunner(browser: MenuBarController.browser)
+    private var runner = GrabRunner(browser: MenuBarController.browser)
     private var busy = false
+    private var ring: RingAnimator!
 
     override init() {
         super.init()
-        if let button = statusItem.button {
-            // Vector asset cropped to the mark's own bounds (496:388), so height sets the
-            // size and width follows the aspect — 18pt would overflow a 22pt menu bar.
-            let icon = NSImage(named: "StatusIcon")
-            icon?.size = NSSize(width: 20.5, height: 16)
-            // Template, unlike the full-colour AppIcon this replaced: the mark is a single
-            // silhouette, so AppKit tints it to match the menu bar (dark on light, light on
-            // dark) instead of it vanishing into a light bar. Notifications are unaffected —
-            // UNUserNotificationCenter takes their icon from the bundle's AppIcon.
-            icon?.isTemplate = true
-            button.image = icon
-            // A missing asset would leave a blank, unexplained gap in the menu bar, so say so.
-            if icon == nil { NSLog("Carabiner: StatusIcon asset missing — status item has no image") }
-        }
+        let renderer = StatusIconRenderer(mark: NSImage(named: "StatusIcon"))
+        // A missing asset would leave a blank, unexplained gap in the menu bar, so say so.
+        if renderer.mark == nil { NSLog("Carabiner: StatusIcon asset missing — status item has no image") }
+        ring = RingAnimator(button: statusItem.button, renderer: renderer)
         let menu = NSMenu()
         let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab), keyEquivalent: "")
         grabItem.target = self
@@ -47,6 +38,10 @@ final class MenuBarController: NSObject {
             NSLog("Carabiner: grab ignored — a grab is already running")
             return
         }
+        // Before the notification and before reading the tab: resolving the front tab is
+        // AppleScript on this thread and is itself part of the wait. The ring covers it as
+        // the `resolve` stage — the same reasoning that put showWorking() here.
+        ring.begin()
         // Before reading the tab, not after: resolve() drives AppleScript on this thread
         // and is itself part of the delay the user is waiting through. Any outcome below
         // replaces this banner rather than adding to it, so an early failure still shows
@@ -59,19 +54,26 @@ final class MenuBarController: NSObject {
         case .notAuthorized:
             NSLog("Carabiner: grab aborted — not authorised to control %@", Self.browser.appName)
             notifier.show(GrabResult(ok: false, message: "Allow Carabiner to control \(Self.browser.appName) under System Settings → Privacy & Security → Automation, then try again"))
+            ring.finish(success: false)
             return
         case .nothing:
             NSLog("Carabiner: grab aborted — no URL in the front tab or the clipboard")
             notifier.show(GrabResult(ok: false, message: "No link in your browser tab or clipboard"))
+            ring.finish(success: false)
             return
         }
         NSLog("Carabiner: grabbing %@", url)
         busy = true
+        runner.onProgress = { [weak self] event in
+            // onProgress arrives on GrabRunner's background queue; the ring is main-only.
+            DispatchQueue.main.async { self?.ring.handle(event) }
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = self.runner.run(url: url)
             DispatchQueue.main.async {
                 NSLog("Carabiner: grab %@ — %@", result.ok ? "succeeded" : "failed", result.message)
+                self.ring.finish(success: result.ok)
                 self.notifier.show(result)
                 self.busy = false
             }
