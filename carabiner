@@ -77,6 +77,14 @@ SAVED=()            # basenames saved this run — drives the notification summa
 die()  { echo "✗ $*" >&2; notify "✗ Grab failed" "$*"; exit 1; }
 info() { echo "$*"; }
 
+# Progress markers for the app's menu-bar ring.
+#
+# Always stderr, never stdout: stdout is the "✓ <filename>" channel that both GrabRunner
+# and the Shortcut parse, and adding to it changes their input. Always on rather than
+# gated behind an env var, because a terminal run shows nothing during a download either —
+# the tools' own output is swallowed into `log="$(…)"` — so this improves that for free.
+progress() { printf '::progress:%s\n' "$1" >&2; }
+
 # macOS notification — only when headless (i.e. launched from the hotkey/Shortcut),
 # so terminal runs stay quiet. Plain native banner (reliable, zero-setup, consistent
 # on every Mac). A custom logo icon needs a per-machine-authorised app — too fragile
@@ -271,6 +279,12 @@ reencode() {
   local src="$1" out="$2" silent="$3"
   local -a REENC_ARGS
   plan_reencode "$src" "$silent"
+  # The ring creeps through the convert stage at a rate set by which of these it is: a
+  # remux is ~0.2s, a real encode can be ~12s (gotcha #21). Same stage, very different wait.
+  case " ${REENC_ARGS[*]} " in
+    *" -c:v copy "*) progress "convert:remux" ;;
+    *)               progress "convert:encode" ;;
+  esac
   ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$out"
 }
 
@@ -348,9 +362,14 @@ ig_gallery() {
     die "gallery-dl failed: ${reason:-no output (exit $rc)}"
   fi
 
-  local n=0 i=0 f ext base out
+  local n=0 i=0 f ext base out total
+  # Counted up front so each item can be announced as "i of n" — the ring divides its
+  # download+convert range by n, so without the total a five-slide carousel would snap to
+  # the end of the range on the first file.
+  total="$(find "$tmp" -type f ! -name '*.json' | wc -l | tr -d ' ')"
   while IFS= read -r -d '' f; do
     i=$((i+1))
+    progress "item:$i:$total"
     ext="$(lower "${f##*.}")"
     if [ -n "$slide" ]; then base="${code}_s${slide}"; else base="${code}_${i}"; fi
     case "$ext" in
@@ -440,6 +459,7 @@ case "$PLATFORM" in
       else
         case "$URL" in
           */p/*)
+            progress probe
             COUNT="$(ig_item_count "$URL")"
             if [ "${COUNT:-1}" -gt 1 ]; then CAROUSEL=1; fi
             ;;
@@ -448,6 +468,8 @@ case "$PLATFORM" in
 
       if [ "$CAROUSEL" -eq 1 ]; then
         info "  (carousel${COUNT:+: $COUNT slides} — asking…)"
+        # The ring freezes here rather than creeping: what this is waiting on is the user.
+        progress prompt
         case "$(ask_slide_or_all "$COUNT")" in
           all)    MODE="all";                            info "  → grabbing all${COUNT:+ $COUNT} slides" ;;
           cancel) info "  cancelled."; exit 0 ;;
@@ -501,6 +523,7 @@ case "$PLATFORM" in
     ;;
 esac
 
+progress save
 # Headless success → one tidy notification summarising what landed.
 if [ "${#SAVED[@]}" -gt 0 ]; then
   if [ "${#SAVED[@]}" -eq 1 ]; then
