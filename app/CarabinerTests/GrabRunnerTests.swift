@@ -180,15 +180,23 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertEqual(result.message, "login required — cookies expired?")
     }
 
-    /// Markers must not reach the success message either — stdout is the ✓ channel, but a
-    /// marker mistakenly echoed there must not be counted as a saved file.
-    func testProgressMarkersDoNotCountAsSaves() {
+    /// stdout is the ✓ channel, and a marker has no business on it. If one ever leaks there —
+    /// a stray `echo` in the script, a tool writing to the wrong stream — it must not be
+    /// counted as a saved file. The stub therefore writes a marker to stdout *deliberately*,
+    /// alongside two real saves: the expected answer is "2 files", and an implementation that
+    /// counted the marker would say "3 files".
+    ///
+    /// The previous version of this test wrote the marker to stderr, which meant it asserted
+    /// nothing this task changed and would have passed with the whole feature removed.
+    func testStdoutMarkerIsNotCountedAsASave() {
         let stub = writeStub("""
-        echo '::progress:download:  10.0%' 1>&2
-        echo '  ✓ ABC_fixed.mp4'
+        echo '  ✓ ABC_s1.jpg'
+        echo '::progress:download:  10.0%'
+        echo '  ✓ ABC_s2.jpg'
         exit 0
         """)
         let result = GrabRunner(executable: stub).run(url: "https://x/y")
-        XCTAssertEqual(result.message, "ABC_fixed.mp4")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "2 files")
     }
 }
