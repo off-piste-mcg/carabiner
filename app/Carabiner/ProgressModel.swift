@@ -157,7 +157,7 @@ struct ProgressModel {
 
     static func tau(_ stage: ProgressStage, _ mode: ConvertMode) -> Double {
         switch stage {
-        case .probe:   return 8.0
+        case .probe:   return 0.9
         case .convert: return mode == .remux ? 0.25 : 1.6
         default:       return 0.7
         }

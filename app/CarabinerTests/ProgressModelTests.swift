@@ -60,13 +60,21 @@ final class ProgressModelTests: XCTestCase {
     private let t0 = Date(timeIntervalSince1970: 1_000_000)
     private func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
 
-    /// Creep must approach its ceiling and never cross it. Crossing would let an
-    /// unknown-length stage claim progress belonging to the next one.
+    /// Creep must stay inside its band: it approaches the ceiling and never crosses it.
+    /// Crossing would let an unknown-length stage claim progress belonging to the next one.
+    ///
+    /// Checked at two time scales on purpose. At 3s the stage is still visibly moving and
+    /// the value is strictly below its ceiling. By 60s the exponential has saturated: the
+    /// shortfall is ~8e-31, far below what a Double can represent near 0.12, so the value
+    /// *is* the ceiling and only "never crosses" is assertable. An earlier version of this
+    /// test demanded strict inequality at 60s, which no tau can satisfy — it fails for a
+    /// reason that has nothing to do with the creep being wrong.
     func testCreepNeverReachesItsCeiling() {
         var m = ProgressModel(start: t0)
         m.apply(.probe, at: t0)
-        XCTAssertLessThan(m.target(at: at(60)), 0.12)
-        XCTAssertGreaterThan(m.target(at: at(60)), 0.119)
+        XCTAssertLessThan(m.target(at: at(3)), 0.12)
+        XCTAssertGreaterThan(m.target(at: at(3)), 0.11)
+        XCTAssertLessThanOrEqual(m.target(at: at(60)), 0.12)
     }
 
     func testDownloadPercentMapsIntoItsBand() {
