@@ -138,6 +138,11 @@ contains "encode announced" "::progress:convert:encode" "$err"
 err="$(CARABINER_TEST_DIALOG="All 2" run 'https://www.instagram.com/p/ABC123/' 2>&1 >/dev/null)"
 contains "first item announced"  "::progress:item:1:2" "$err"
 contains "second item announced" "::progress:item:2:2" "$err"
+# gallery-dl reports nothing while it runs, so ig_gallery announces the stage itself. This
+# is the only check that reaches that line at all — check 2 takes the default dialog answer
+# and routes to ig_video, so without this assertion the marker could be deleted outright
+# and the suite would stay green.
+contains "gallery download announced" "::progress:download" "$err"
 
 # 5. The save marker closes the run.
 err="$(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)"
@@ -154,6 +159,10 @@ lacks "stdout still carries no markers" "::progress:" "$out"
 #    freeze for the whole download and then snap to full, which is the exact symptom this
 #    feature exists to remove. Measured 2026-07-31: 1.7s of output delivered at t=1.7s.
 #    The stub sleeps 0.3s between three markers, so live delivery spans >= ~0.6s.
+#    The threshold lives in one variable and is interpolated into both the comparison and
+#    the failure label — hardcoding the label separately makes a raised threshold print a
+#    message that lies about what was wanted.
+live_ms=400
 first=""; last=""
 while IFS= read -r line; do
   case "$line" in
@@ -163,10 +172,10 @@ while IFS= read -r line; do
       last="$now" ;;
   esac
 done < <(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)
-if [ -n "$first" ] && [ -n "$last" ] && [ "$((last - first))" -ge 400 ]; then
+if [ -n "$first" ] && [ -n "$last" ] && [ "$((last - first))" -ge "$live_ms" ]; then
   check "progress arrives live, not buffered to the end" "live" "live"
 else
-  check "progress arrives live, not buffered to the end" "spread >= 400ms" "spread $((last - first))ms"
+  check "progress arrives live, not buffered to the end" "spread >= ${live_ms}ms" "spread $((last - first))ms"
 fi
 
 # 8. Gotcha #4's fallback still works: "No video formats found!" means this is an image
