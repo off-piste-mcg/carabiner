@@ -35,6 +35,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
     func show() {
+        UserDefaults.standard.set(true, forKey: Self.shownDefaultsKey)
         refreshAll()
         NSApp.activate(ignoringOtherApps: true)
         window?.center()
@@ -152,7 +153,6 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         hotkeyTimer?.invalidate()
         clearIntercept()
         hotkeyModel.cancel()
-        UserDefaults.standard.set(true, forKey: Self.shownDefaultsKey)
     }
 }
 

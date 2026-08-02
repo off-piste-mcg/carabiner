@@ -34,8 +34,8 @@ something was denied. That is exactly what each row does.
 ## When it appears
 
 - **First launch:** shown automatically. Tracked by a `UserDefaults` flag
-  (`onboardingShown`) set when the window closes — closing without completing is fine;
-  it never auto-nags again.
+  (`onboardingShown`) set when the window is first shown — so it never auto-nags again,
+  even if the app quits with the window still open.
 - **Any time after:** a new **"Setup & Permissions…"** status-menu item (above Quit)
   reopens it. The live status ticks make it the diagnostics page when grabs stop
   working.
