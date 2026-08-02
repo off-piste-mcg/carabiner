@@ -75,9 +75,13 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   front browser tab via AppleScript, shells out to this repo's `carabiner` script, and
   posts a **branded** notification with the filename (or "N files"). Swift owns the
   experience; bash still owns the grabbing — the app never re-implements the pipeline.
-  While a grab runs, the status item draws a progress ring around the mark (which shrinks
-  to 10pt for the duration) — driven by `::progress:` markers the script writes to stderr,
-  not by a guess. See `docs/superpowers/specs/2026-07-31-menu-bar-progress-ring-design.md`.
+  While a grab is *actually downloading or converting*, the status item draws a progress
+  ring around the mark (which shrinks to 10pt for the duration) — driven by `::progress:`
+  markers the script writes to stderr, not by a guess. The ring deliberately does NOT
+  appear at the hotkey: it reads as "downloading", so it waits for the first
+  download/item/convert marker (`ProgressEvent.beginsActivity`) — during the carousel
+  probe and the dialog there is no ring, and the working banner is the immediate
+  feedback instead. See `docs/superpowers/specs/2026-07-31-menu-bar-progress-ring-design.md`.
   Built with XcodeGen (`xcodegen generate` from `app/`; the `.xcodeproj` and the generated
   `Info.plist` are gitignored — `project.yml` is the single source of truth). **Requires a
   development code signature to work at all — see gotcha #11.** Build with:
@@ -497,15 +501,38 @@ from the URL for "just this slide".
     There is no `ffprobe` in the bundle — only `ffmpeg`, `yt-dlp` and `gallery-dl` — which
     is why the probe parses `ffmpeg -i` stderr rather than using the obvious tool.
 
-22. **The app posts one notification per grab, not two.** `Notifier` posts "Grabbing…"
-    immediately (before reading the tab, since AppleScript is part of the wait) and the
-    outcome re-uses the **same identifier**, so it replaces that banner in place. A fresh
-    UUID per banner — the obvious way — leaves both stacked in Notification Centre and a
-    stale "Grabbing…" outliving the grab it described. The shell script does the
-    equivalent for the Shortcut path with a plain banner, still gated on
-    `CARABINER_NO_NOTIFY` so the app never doubles up. This matters beyond polish: until
-    something appears, a slow grab and a hotkey that never fired are indistinguishable,
-    and a silently-lost chord is a real failure mode (gotcha #14).
+22. **The outcome banner must NEVER reuse the working banner's identifier — same-id
+    "replace in place" only re-presents while the old banner is still on screen.**
+    Corrected 2026-08-02; this entry previously prescribed the same-id scheme, and that
+    is exactly the bug it caused. Posting a `UNNotificationRequest` whose identifier is
+    already *delivered* replaces the entry in Notification Centre **without showing a new
+    banner** (documented UNUserNotificationCenter behaviour). While the old banner is
+    still on screen the replacement is visible, which is why the same-id scheme looked
+    verified: fast single grabs finished inside the banner's ~5s lifetime. Every carousel
+    finished after it, so "✓ Saved N files" landed silently in Notification Centre and
+    the user saw nothing — success and a dead grab were indistinguishable.
+
+    Current scheme (`Notifier` executes, `BannerPlanner` decides — the planner is pure
+    and unit-tested, because UNUserNotificationCenter only works in a signed,
+    LaunchServices-launched bundle):
+    - The **working** banner keeps one fixed identifier: on-screen updates replace in
+      place, off-screen stage updates amend Notification Centre silently — both right
+      for progress. Its body tracks the script's markers ("Reading the link…" →
+      "Checking the post…" → "Saving to Downloads" / "Saving slide i of n…"), so it
+      never claims a download that hasn't started.
+    - While the carousel dialog is up (`::progress:prompt`) the working banner is
+      **removed** — the dialog is the UI, and the removal is also what makes the re-post
+      after the user's choice present as a new banner.
+    - The **outcome** posts with a fresh UUID after explicitly removing the working
+      banner and the previous grab's outcome. Fresh id ⇒ always presents; the removals ⇒
+      no stacking, which was the (real) problem the same-id scheme was solving.
+    - Cancel on the dialog is detected (`  cancelled.` on stdout →
+      `GrabResult.cancelled`) and posts **nothing** — a deliberate act is not an outcome.
+
+    "Post something immediately" still stands: until a banner appears, a slow grab and a
+    hotkey that never fired are indistinguishable, and a silently-lost chord is a real
+    failure mode (gotcha #14). The shell script keeps its own plain equivalent for the
+    Shortcut path, still gated on `CARABINER_NO_NOTIFY` so the app never doubles up.
 
 23. **`--newline` is what makes progress live — NOT `PYTHONUNBUFFERED`. This entry
     previously said the opposite, and that was measured wrong.** Corrected 2026-07-31.
@@ -568,6 +595,22 @@ from the URL for "just this slide".
     `.mp4` and would win. On the failure path the function returns before that lookup
     runs, so there is no live bug today — but the lookup is order-dependent in a way
     nothing guarantees, and is worth tightening the next time that function is touched.
+
+24. **A button named "Cancel" never comes back as `button returned` — `display dialog`
+    THROWS -128, and without a catch, Cancel silently meant "grab slide 1".** Found
+    2026-08-02 from a user report. AppleScript auto-designates any button literally named
+    "Cancel" as the dialog's cancel button, and clicking it raises error -128 ("User
+    canceled") instead of returning: osascript exits 1 with nothing on stdout,
+    `ask_slide_or_all` saw an empty answer, and its "dialog failed → safe default"
+    fallback answered **slide** — so Cancel and "This slide" were the same button, and
+    the `"Cancel")` case was unreachable dead code on the headless path. The heredoc now
+    wraps the dialog in `try … on error number -128 → return "Cancel"`, pinned to -128
+    specifically: any *other* osascript failure still comes out empty and takes the safe
+    default, which is what a genuinely broken dialog should do. The osascript stub in
+    `test/test-progress.sh` models the throw faithfully (it only answers "Cancel"
+    cleanly if the submitted AppleScript carries the -128 catch) — a stub that just
+    echoed "Cancel" would have hidden this bug forever, which is gotcha #23's stub
+    lesson again. Check 10 there pins cancel-downloads-nothing.
 
 ## Dependencies
 
