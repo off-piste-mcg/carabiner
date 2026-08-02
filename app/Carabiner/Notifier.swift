@@ -12,19 +12,6 @@ final class Notifier {
     /// removed when the next outcome posts so Carabiner never accumulates history there.
     private var lastOutcomeId: String?
 
-    func requestAuthorization() {
-        // Phase 1 builds are unsigned, and UNUserNotificationCenter is historically
-        // unreliable for unsigned bundles. The banner *is* the feature, so a refusal
-        // has to leave a trace — otherwise every grab just silently says nothing.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                NSLog("Carabiner: notification authorization failed: %@", error.localizedDescription)
-            } else {
-                NSLog("Carabiner: notification authorization %@", granted ? "granted" : "denied")
-            }
-        }
-    }
-
     /// Immediate acknowledgement that the hotkey landed. A grab is not fast, and until
     /// something appears a slow grab and a hotkey that never fired are indistinguishable —
     /// which is exactly what a lost chord looks like (gotcha #14).

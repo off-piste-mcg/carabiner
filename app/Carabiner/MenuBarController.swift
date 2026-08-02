@@ -14,6 +14,10 @@ final class MenuBarController: NSObject {
     /// Whether this grab's ring has begun. The ring only exists once real work is
     /// happening (see the comment in `grab()`); reset per grab.
     private var ringStarted = false
+    /// One-shot: set by the setup window's hotkey test. When present, the next hotkey
+    /// fire is a test, not a grab — consumed before anything else in grab().
+    var hotkeyTestHandler: (() -> Void)?
+    private var onboarding: OnboardingWindowController?
 
     override init() {
         super.init()
@@ -25,6 +29,9 @@ final class MenuBarController: NSObject {
         let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab), keyEquivalent: "")
         grabItem.target = self
         menu.addItem(grabItem)
+        let setupItem = NSMenuItem(title: "Setup & Permissions…", action: #selector(showOnboarding), keyEquivalent: "")
+        setupItem.target = self
+        menu.addItem(setupItem)
         menu.addItem(.separator())
         // No explicit target: lets this route up the responder chain to NSApp, which
         // implements terminate:. MenuBarController itself does not, so an explicit
@@ -33,7 +40,22 @@ final class MenuBarController: NSObject {
         statusItem.menu = menu
     }
 
+    @objc func showOnboarding() {
+        if onboarding == nil {
+            onboarding = OnboardingWindowController(
+                checker: LivePermissionChecker(browser: Self.browser),
+                hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
+                clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
+        }
+        onboarding?.show()
+    }
+
     @objc func grab() {
+        if let test = hotkeyTestHandler {
+            hotkeyTestHandler = nil
+            test()
+            return
+        }
         // Every outcome below is reported by notification, so if notifications are
         // unavailable the app has no voice at all — a failed grab looks exactly like a
         // dead hotkey. Log each outcome too, so the app stays diagnosable without it.
