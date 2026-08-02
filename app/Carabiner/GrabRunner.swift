@@ -3,6 +3,9 @@ import Foundation
 struct GrabResult {
     let ok: Bool
     let message: String
+    /// The user dismissed the carousel dialog. Not a failure to report — the only correct
+    /// banner response is silence.
+    var cancelled: Bool = false
 }
 
 struct GrabRunner {
@@ -115,8 +118,11 @@ struct GrabRunner {
         let saved = outLines.filter { $0.hasPrefix("✓ ") }.map { String($0.dropFirst(2)) }
         if saved.isEmpty {
             // Exit 0 with nothing announced: the user hit Cancel on the carousel prompt
-            // (`carabiner` exits 0 there). Not a save — and not a crash either.
-            return GrabResult(ok: false, message: "Nothing saved")
+            // (`carabiner` prints `  cancelled.` and exits 0 there). Not a save — and not
+            // a crash either. Anything else that exits 0 without announcing a save is a
+            // genuine "nothing happened" worth reporting.
+            let cancelled = outLines.contains("cancelled.")
+            return GrabResult(ok: false, message: "Nothing saved", cancelled: cancelled)
         }
         if saved.count == 1 { return GrabResult(ok: true, message: saved[0]) }
         return GrabResult(ok: true, message: "\(saved.count) files")

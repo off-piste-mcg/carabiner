@@ -12,6 +12,19 @@ enum ProgressEvent: Equatable {
     case item(index: Int, total: Int)
     case convert(ConvertMode)
     case save
+
+    /// Whether this event justifies a ring in the menu bar. The ring reads as
+    /// "downloading", so probe and prompt must not summon it — a ring creeping while the
+    /// script is only counting slides, or frozen beside the carousel dialog, both read as
+    /// a download that has already started. `save` alone doesn't either: on the
+    /// YouTube/Pinterest/generic branches it is the *first* marker (gotcha #23's scope
+    /// note), and a ring born at 96% is a completion flourish, not download feedback.
+    var beginsActivity: Bool {
+        switch self {
+        case .download, .item, .convert: return true
+        case .probe, .prompt, .save:     return false
+        }
+    }
 }
 
 enum ConvertMode: String, Equatable {

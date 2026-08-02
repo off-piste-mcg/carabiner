@@ -11,6 +11,9 @@ final class MenuBarController: NSObject {
     private var runner = GrabRunner(browser: MenuBarController.browser)
     private var busy = false
     private var ring: RingAnimator!
+    /// Whether this grab's ring has begun. The ring only exists once real work is
+    /// happening (see the comment in `grab()`); reset per grab.
+    private var ringStarted = false
 
     override init() {
         super.init()
@@ -38,51 +41,61 @@ final class MenuBarController: NSObject {
             NSLog("Carabiner: grab ignored — a grab is already running")
             return
         }
-        // Before the notification and before reading the tab: resolving the front tab is
-        // AppleScript on this thread and is itself part of the wait — the same reasoning
-        // that put showWorking() here.
-        //
-        // The `resolve` band (0 → 5%) does NOT animate, and that is a consequence of this
-        // ordering rather than a bug to chase. `tabReader.resolve()` below is a synchronous
-        // AppleScript call on the main thread, so the ring's 30fps `RunLoop.main` timer
-        // cannot fire until it returns; the arc's first movement is whatever the first
-        // script marker puts it at. The user still gets immediate feedback because
-        // `begin()` draws the shrunk mark and the empty track synchronously, right here.
-        // Do not "fix" this by moving AppleScript off the main thread.
-        ring.begin()
+        // The ring does NOT begin here. It reads as "downloading", so it waits for the
+        // first progress event that is actual work (`beginsActivity` — download, item or
+        // convert): starting it at the hotkey meant it crept through the carousel probe
+        // and sat frozen beside the dialog, both of which read as a download that had
+        // already begun. Immediate feedback is the working banner's job (grabStarted(),
+        // next line); the failure paths below call ring.finish() unconditionally, which
+        // is a no-op on a ring that never began.
+        ringStarted = false
         // Before reading the tab, not after: resolve() drives AppleScript on this thread
         // and is itself part of the delay the user is waiting through. Any outcome below
-        // replaces this banner rather than adding to it, so an early failure still shows
+        // takes this banner down and posts its own, so an early failure still shows
         // exactly one notification.
-        notifier.showWorking()
+        notifier.grabStarted()
         let url: String
         switch tabReader.resolve() {
         case .url(let u):
             url = u
         case .notAuthorized:
             NSLog("Carabiner: grab aborted — not authorised to control %@", Self.browser.appName)
-            notifier.show(GrabResult(ok: false, message: "Allow Carabiner to control \(Self.browser.appName) under System Settings → Privacy & Security → Automation, then try again"))
+            notifier.finished(GrabResult(ok: false, message: "Allow Carabiner to control \(Self.browser.appName) under System Settings → Privacy & Security → Automation, then try again"))
             ring.finish(success: false)
             return
         case .nothing:
             NSLog("Carabiner: grab aborted — no URL in the front tab or the clipboard")
-            notifier.show(GrabResult(ok: false, message: "No link in your browser tab or clipboard"))
+            notifier.finished(GrabResult(ok: false, message: "No link in your browser tab or clipboard"))
             ring.finish(success: false)
             return
         }
         NSLog("Carabiner: grabbing %@", url)
         busy = true
         runner.onProgress = { [weak self] event in
-            // onProgress arrives on GrabRunner's background queue; the ring is main-only.
-            DispatchQueue.main.async { self?.ring.handle(event) }
+            // onProgress arrives on GrabRunner's background queue; the ring and the
+            // notifier's planner state are both main-only.
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if !self.ringStarted, event.beginsActivity {
+                    self.ringStarted = true
+                    self.ring.begin()
+                }
+                // Events before the ring exists (probe, prompt) are the notifier's story
+                // only — feeding them to a never-begun ring would be harmless today, but
+                // the gate keeps "no ring" and "ring ignores this" from blurring.
+                if self.ringStarted { self.ring.handle(event) }
+                self.notifier.handle(event)
+            }
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             let result = self.runner.run(url: url)
             DispatchQueue.main.async {
-                NSLog("Carabiner: grab %@ — %@", result.ok ? "succeeded" : "failed", result.message)
+                NSLog("Carabiner: grab %@ — %@",
+                      result.ok ? "succeeded" : (result.cancelled ? "cancelled" : "failed"),
+                      result.message)
                 self.ring.finish(success: result.ok)
-                self.notifier.show(result)
+                self.notifier.finished(result)
                 self.busy = false
             }
         }

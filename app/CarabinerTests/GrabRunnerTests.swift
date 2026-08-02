@@ -44,13 +44,23 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertEqual(result.message, "3 files")
     }
 
-    /// Cancelling the carousel prompt makes `carabiner` exit 0 having saved nothing
-    /// (`cancel) info "  cancelled."; exit 0`). That must not banner as a success — nor
-    /// read like a crash.
-    func testExitZeroWithoutMarkerIsNotSuccess() {
+    /// Cancelling the carousel prompt makes `carabiner` exit 0 having saved nothing,
+    /// announcing `  cancelled.` on stdout. That is a deliberate act — it must not banner
+    /// as a success, a failure, or a crash, so it needs its own flag.
+    func testCancelledPromptIsReportedAsCancelled() {
         let stub = writeStub("echo 'carabiner → instagram'; echo '  cancelled.'; exit 0")
         let result = GrabRunner(executable: stub).run(url: "https://x/y")
         XCTAssertFalse(result.ok)
+        XCTAssertTrue(result.cancelled)
+    }
+
+    /// Exit 0 with nothing announced and no cancel line is still not a success — but it
+    /// isn't a cancel either, so it must keep bannering as a failure.
+    func testExitZeroWithoutMarkerIsNotSuccess() {
+        let stub = writeStub("echo 'carabiner → instagram'; exit 0")
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertFalse(result.cancelled)
         XCTAssertEqual(result.message, "Nothing saved")
     }
 
