@@ -11,6 +11,17 @@ enum Browser: String, CaseIterable {
         case .arc:    return "Arc"
         }
     }
+
+    /// TCC identifies Automation targets by bundle id, not name.
+    var bundleId: String {
+        switch self {
+        case .chrome: return "com.google.Chrome"
+        case .safari: return "com.apple.Safari"
+        case .brave:  return "com.brave.Browser"
+        case .edge:   return "com.microsoft.edgemac"
+        case .arc:    return "company.thebrowser.Browser"
+        }
+    }
 }
 
 /// What `resolve()` came back with. Denied Automation is called out separately because
