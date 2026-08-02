@@ -114,9 +114,24 @@ exit 0
 STUB
 
 # osascript: stands in for the carousel dialog. Answer comes from the environment.
+#
+# Cancel is special, and the stub must model it faithfully or it measures itself
+# (gotcha #23): clicking a button named "Cancel" makes `display dialog` THROW error
+# -128 rather than return "Cancel" — osascript exits 1 with nothing on stdout — UNLESS
+# the submitted AppleScript catches -128 itself. The dialog call is the only one that
+# arrives with no arguments (the heredoc comes in on stdin), so that is where the
+# branch lives.
 cat > "$BIN/osascript" <<'STUB'
 #!/usr/bin/env bash
-echo "${CARABINER_TEST_DIALOG:-This slide}"
+answer="${CARABINER_TEST_DIALOG:-This slide}"
+if [ $# -eq 0 ] && [ "$answer" = "Cancel" ]; then
+  applescript="$(cat)"
+  case "$applescript" in
+    *"on error number -128"*) echo "Cancel"; exit 0 ;;
+    *) echo "execution error: User canceled. (-128)" >&2; exit 1 ;;
+  esac
+fi
+echo "$answer"
 exit 0
 STUB
 
@@ -215,6 +230,15 @@ contains "no-video falls back to gallery-dl" "✓ " "$out"
 #    out of the tee pipeline; without it a failed download would look like a success.
 out="$(CARABINER_TEST_FAIL=1 run 'https://www.instagram.com/reel/ABC123/' 2>/dev/null)"; rc=$?
 check "a failing download exits non-zero" "nonzero" "$([ "$rc" -ne 0 ] && echo nonzero || echo "zero")"
+
+# 10. Cancel on the carousel dialog must download NOTHING. Clicking "Cancel" makes
+#     display dialog throw -128 (see the osascript stub), so unless the heredoc catches
+#     it, ask_slide_or_all sees an empty answer, takes its "dialog failed" default and
+#     silently grabs slide 1 — cancel and "grab a slide" become the same button.
+out="$(CARABINER_TEST_DIALOG="Cancel" run 'https://www.instagram.com/p/ABC123/' 2>/dev/null)"; rc=$?
+contains "cancel announces itself" "cancelled." "$out"
+lacks    "cancel saves nothing"    "✓ "          "$out"
+check    "cancel exits zero"       "0"           "$rc"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
