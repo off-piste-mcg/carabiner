@@ -29,6 +29,13 @@ struct HotkeyTestModel {
         state = .timedOut
     }
 
+    /// The window closed mid-listen: the intercept is being cleared, so listening no
+    /// longer means anything. Back to idle so a reopened window offers Test again.
+    mutating func cancel() {
+        guard state == .listening else { return }
+        state = .idle
+    }
+
     var presentation: HotkeyTestPresentation {
         switch state {
         case .idle:

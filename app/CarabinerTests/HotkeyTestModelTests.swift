@@ -60,4 +60,23 @@ final class HotkeyTestModelTests: XCTestCase {
         m.timeout()
         XCTAssertEqual(m.state, .confirmed)
     }
+
+    /// Closing the window mid-listen must not strand the row: the intercept is gone,
+    /// so a listening presentation with no button would be a permanent dead-end when
+    /// the window is reopened.
+    func testCancelWhileListeningReturnsToIdle() {
+        var m = HotkeyTestModel()
+        m.beginTest()
+        m.cancel()
+        XCTAssertEqual(m.state, .idle)
+    }
+
+    /// Cancel outside listening changes nothing — a confirmed test stays confirmed.
+    func testCancelOutsideListeningIsIgnored() {
+        var m = HotkeyTestModel()
+        m.beginTest()
+        m.hotkeyFired()
+        m.cancel()
+        XCTAssertEqual(m.state, .confirmed)
+    }
 }

@@ -151,6 +151,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         hotkeyTimer?.invalidate()
         clearIntercept()
+        hotkeyModel.cancel()
         UserDefaults.standard.set(true, forKey: Self.shownDefaultsKey)
     }
 }
