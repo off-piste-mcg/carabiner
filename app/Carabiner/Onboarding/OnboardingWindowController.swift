@@ -51,12 +51,12 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         stack.edgeInsets = NSEdgeInsets(top: 24, left: 28, bottom: 20, right: 28)
 
         let logo = NSImageView(image: NSApp.applicationIconImage)
-        logo.symbolConfiguration = nil
         logo.translatesAutoresizingMaskIntoConstraints = false
         logo.widthAnchor.constraint(equalToConstant: 56).isActive = true
         logo.heightAnchor.constraint(equalToConstant: 56).isActive = true
 
-        let pitch = label("Clip a post. Keep the file.", font: .boldSystemFont(ofSize: 16))
+        let pitch = label("Clip a post. Keep the file.", font: .boldSystemFont(ofSize: 16),
+                          color: Self.accent)
         let howTo = label(
             "1  Open an Instagram post in Chrome\n2  Press ⌃⌥⌘V\n3  The file lands in ~/Downloads\n\nCarousels ask: this slide, or all of them.",
             font: .monospacedSystemFont(ofSize: 12, weight: .regular))
