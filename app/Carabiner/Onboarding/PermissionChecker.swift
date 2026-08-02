@@ -88,10 +88,10 @@ final class LivePermissionChecker: PermissionChecking {
 
     private func ensureRunning(bundleId: String, then: @escaping (Bool) -> Void) {
         if !NSRunningApplication.runningApplications(withBundleIdentifier: bundleId).isEmpty {
-            then(true); return
+            DispatchQueue.main.async { then(true) }; return
         }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else {
-            then(false); return
+            DispatchQueue.main.async { then(false) }; return
         }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { app, _ in
             DispatchQueue.main.async { then(app != nil) }
