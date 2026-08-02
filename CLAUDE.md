@@ -82,6 +82,15 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   download/item/convert marker (`ProgressEvent.beginsActivity`) — during the carousel
   probe and the dialog there is no ring, and the working banner is the immediate
   feedback instead. See `docs/superpowers/specs/2026-07-31-menu-bar-progress-ring-design.md`.
+  First launch opens a branded **Setup & Permissions** window (reopenable via the
+  status menu): per-permission Allow rows with live status — notifications, browser
+  Automation (launches the browser first; the OS can neither prompt nor report for a
+  closed target), System Events for the carousel dialog — plus a hotkey test that
+  catches the silently-lost-chord case (gotcha #14). On fresh installs it is the only
+  thing that triggers permission prompts. Verified 2026-08-02 on a `tccutil`-reset
+  machine, including the spec's flagged assumption: the System Events grant made
+  through the window does cover the script's osascript dialog (TCC attributes the
+  child to the app). See `docs/superpowers/specs/2026-08-02-onboarding-design.md`.
   Built with XcodeGen (`xcodegen generate` from `app/`; the `.xcodeproj` and the generated
   `Info.plist` are gitignored — `project.yml` is the single source of truth). **Requires a
   development code signature to work at all — see gotcha #11.** Build with:
