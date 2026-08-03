@@ -49,7 +49,13 @@ yt-dlp --cookies-from-browser chrome -j 'https://www.instagram.com/reel/REAL/' \
 
 Expected: one of the fields holds the `@`-less handle (e.g. `"channel": "offpiste.mcg"`), and `uploader_id` is likely numeric. Record the winner as `IG_HANDLE_FIELD` here:
 
-> **IG_HANDLE_FIELD = channel** ← placeholder assumption; overwrite with the observed value and note the date.
+> **IG_HANDLE_FIELD = channel** ← verified 2026-08-03 against a real post
+> (`https://www.instagram.com/p/DagVVj0Ecgm/`, a 14-slide mixed carousel). `yt-dlp -j`
+> on that URL (no `/reel/` was at hand; this carousel itself mixes video and image
+> slides, which covers the video path) printed `"channel": "the_midnight_club"` on
+> every entry that had video formats, `"uploader": "The Midnight Club"` (display name,
+> not the handle), and `"uploader_id": "3284523821"` (numeric, confirms gotcha #7's
+> trap). `channel` is the `@`-less handle. `uploader`/`uploader_id` are decoys.
 
 - [ ] **Step 3: Observe both tools' real sidecars**
 
@@ -69,6 +75,38 @@ rm -rf "$d" "$d2"
 ```
 
 Record here what was actually observed (sidecar names, whether `": "` has a space, the username key). The Task 2 stubs must copy this shape.
+
+> **Observed 2026-08-03**, real post `https://www.instagram.com/p/DagVVj0Ecgm/`:
+>
+> - **yt-dlp**: with `-o "$d/src.%(ext)s" --write-info-json --no-write-playlist-metafiles`
+>   run against the whole carousel (no `--playlist-items` restriction — the first slide
+>   is an image and errors "No video formats found", consistent with gotcha #4/#15), the
+>   dest dir contained exactly `src.info.json` + `src.mp4` — each successive video slide
+>   overwrote the same two filenames, so the final `src.info.json` reflects the last
+>   video entry downloaded. **Compact one-line JSON**, confirmed by `head -c 400`:
+>   `{"id": "DagU0G8EQW_", "title": "Video by the_midnight_club", "description": "...`.
+>   The `channel` field reads `"channel": "the_midnight_club"` — **space after the
+>   colon**, matching the plan's assumed shape (`"FIELD": "handle"`).
+> - **gallery-dl**: `-D "$d2" --range 1 --write-metadata` on the same URL produced
+>   `<hash>.jpg` + `<hash>.jpg.json` (filename `3936239914862102566_3936236981302290230.jpg`
+>   + `.json` sidecar) — confirms the sidecar is `<filename>.json`, exactly as assumed.
+>   The JSON is **pretty-printed** (4-space indent, one key per line), NOT compact:
+>   ```
+>   {
+>       "post_id": "3936239914862102566",
+>       ...
+>       "username": "the_midnight_club",
+>       "fullname": "The Midnight Club",
+>       ...
+>   ```
+>   `grep -o '"username": *"[^"]*"'` matched `"username": "the_midnight_club"` — space
+>   after the colon, same as yt-dlp's shape. `owner_id` (`"3284523821"`) is gallery-dl's
+>   numeric decoy, mirroring yt-dlp's `uploader_id` — same account, same numeric ID,
+>   confirming both tools agree on which post/account this is.
+>
+> Both tools' one-line-per-key grep target (`"KEY": ?"VALUE"`, optional space) works
+> unchanged against compact (yt-dlp) and pretty-printed (gallery-dl) JSON, since each
+> key still lands on its own matchable substring either way.
 
 - [ ] **Step 4: No commit** — this task changes only this plan file (the recorded facts). Commit the annotated plan:
 
