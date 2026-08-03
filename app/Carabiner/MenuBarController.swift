@@ -14,8 +14,9 @@ final class MenuBarController: NSObject {
     /// Whether this grab's ring has begun. The ring only exists once real work is
     /// happening (see the comment in `grab()`); reset per grab.
     private var ringStarted = false
-    /// One-shot: set by the setup window's hotkey test. When present, the next hotkey
-    /// fire is a test, not a grab — consumed before anything else in grab().
+    /// One-shot: set by the setup window's hotkey test. When present, the next REAL hotkey
+    /// fire is a test, not a grab — consumed in hotkeyFired(), never by the menu item, so
+    /// clicking "Grab current tab" can't fake a ✓.
     var hotkeyTestHandler: (() -> Void)?
     private var onboarding: OnboardingWindowController?
 
