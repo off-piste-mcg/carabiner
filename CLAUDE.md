@@ -58,6 +58,10 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   - **Progress**: reports its stage on stderr as `::progress:` markers — always on, no
     flag to disable them. stdout is unchanged, so the Shortcut path (which only reads
     stdout) is unaffected; the app is the only consumer, via `GrabRunner`.
+    One marker is metadata rather than a stage: `::progress:from:@user` names the
+    Instagram account a grab came from (parsed from gallery-dl `--write-metadata` /
+    yt-dlp `--write-info-json` sidecars — no extra network) and drives the app's
+    "✓ Saved from @user" banner; a missing handle degrades to the plain "✓ Saved".
 - **`setup.sh`** — installs the three deps via Homebrew, links `carabiner`/`clip`/`crab`.
 - **`README.md`** — team setup + the macOS Shortcut wiring.
 - **Shipped:** public repo at `github.com/off-piste-mcg/carabiner` (clone + `./setup.sh`).
