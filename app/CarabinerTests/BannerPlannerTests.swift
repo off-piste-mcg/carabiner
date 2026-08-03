@@ -79,14 +79,39 @@ final class BannerPlannerTests: XCTestCase {
         _ = planner.grabStarted()
         _ = planner.handle(.download(percent: 100))
         XCTAssertEqual(planner.finished(GrabResult(ok: true, message: "ABC_fixed.mp4")),
-                       [.postOutcome(ok: true, message: "ABC_fixed.mp4")])
+                       [.postOutcome(ok: true, message: "ABC_fixed.mp4", user: nil)])
     }
 
     func testFailurePostsAFreshOutcome() {
         var planner = BannerPlanner()
         _ = planner.grabStarted()
         XCTAssertEqual(planner.finished(GrabResult(ok: false, message: "cookies expired")),
-                       [.postOutcome(ok: false, message: "cookies expired")])
+                       [.postOutcome(ok: false, message: "cookies expired", user: nil)])
+    }
+
+    /// The handle rides the outcome — the planner passes it through untouched so the
+    /// subtitle policy stays in one place (Notifier.outcomeSubtitle).
+    func testSuccessCarriesTheHandleThrough() {
+        var planner = BannerPlanner()
+        _ = planner.grabStarted()
+        XCTAssertEqual(planner.finished(GrabResult(ok: true, message: "9 files", user: "@offpiste.mcg")),
+                       [.postOutcome(ok: true, message: "9 files", user: "@offpiste.mcg")])
+    }
+
+    // MARK: - subtitle policy (pure, so it is testable outside a signed bundle)
+
+    func testSubtitleNamesTheAccountOnSuccess() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: true, user: "@offpiste.mcg"),
+                       "✓ Saved from @offpiste.mcg")
+    }
+
+    func testSubtitleFallsBackWhenHandleUnknown() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: true, user: nil), "✓ Saved")
+    }
+
+    /// A failure never names the account, even when the engine reported one before dying.
+    func testFailureSubtitleIgnoresTheHandle() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: false, user: "@offpiste.mcg"), "✗ Grab failed")
     }
 
     /// Cancelling the carousel dialog is a deliberate act, not a failure. The only right

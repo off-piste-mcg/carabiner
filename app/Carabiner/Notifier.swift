@@ -41,12 +41,12 @@ final class Notifier {
             case .removeWorking:
                 center.removeDeliveredNotifications(withIdentifiers: [Self.workingId])
 
-            case .postOutcome(let ok, let message):
+            case .postOutcome(let ok, let message, let user):
                 let content = UNMutableNotificationContent()
                 content.title = "Carabiner"
                 // Subtitle carries the verdict, body the detail the script actually
                 // reported (a filename, a directory, a reason) — never each other's text.
-                content.subtitle = ok ? "✓ Saved" : "✗ Grab failed"
+                content.subtitle = Self.outcomeSubtitle(ok: ok, user: user)
                 content.body = message
                 // A FRESH identifier every time, and this is load-bearing: posting with an
                 // already-delivered identifier *replaces* that notification in Notification
@@ -74,4 +74,14 @@ final class Notifier {
     }
 
     private static let workingId = "com.offpiste.carabiner.grab"
+
+    /// The verdict line. Static and pure so the one piece of banner *copy* with logic in
+    /// it is testable — UNUserNotificationCenter itself only works in a signed,
+    /// LaunchServices-launched bundle. A failure never names the account: "Grab failed
+    /// from @x" reads as blame, and the message line already says what went wrong.
+    static func outcomeSubtitle(ok: Bool, user: String?) -> String {
+        guard ok else { return "✗ Grab failed" }
+        if let user { return "✓ Saved from \(user)" }
+        return "✓ Saved"
+    }
 }
