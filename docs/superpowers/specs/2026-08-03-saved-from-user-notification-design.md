@@ -57,8 +57,12 @@ The script emits one new stderr marker once the handle is known:
 
 App side:
 
-- `ProgressParser` gains a `.from(handle: String)` event.
-- `GrabRunner` records the handle from the event stream and adds
+- `ProgressParser` gains a separate `parseUser(_:) -> String?` — NOT a new
+  `ProgressEvent` case. The handle is metadata, not a stage: an event case
+  would force `ProgressModel.apply`, `BannerPlanner.handle` and
+  `beginsActivity` to each add an ignore-branch for a line that has nothing
+  to do with the ring. `parse()` keeps returning `nil` for `from` lines.
+- `GrabRunner` records the handle from the stderr stream and adds
   `user: String?` to `GrabResult`.
 - `BannerPlanner.finished` passes it through:
   `.postOutcome(ok:message:user:)`.
