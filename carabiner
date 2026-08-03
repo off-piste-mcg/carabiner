@@ -301,6 +301,17 @@ reencode() {
 
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 
+# Pull a string field out of a tool's JSON sidecar without a JSON parser. First match
+# wins, and the pattern cannot hit inside a longer string value: an embedded quote
+# there is escaped (\"), so the bytes `"key": "` never occur mid-string. The value
+# charset is exactly an IG username's, which doubles as sanitisation — a weird value
+# simply doesn't match, and no marker is emitted (the handle is decoration, never a
+# dependency).
+json_field() {  # $1 = key, $2 = file → prints the bare value, or nothing
+  grep -oE "\"$1\": ?\"[A-Za-z0-9._]+\"" "$2" 2>/dev/null \
+    | head -n1 | sed -E 's/^.*: ?"//; s/"$//'
+}
+
 # ---------------------------------------------------------------------------
 # Instagram: video via yt-dlp (single post or one slide), re-encoded.
 # Returns: 0 = got a video, 10 = no video here (caller falls back to images),
@@ -309,7 +320,8 @@ lower() { echo "$1" | tr 'A-Z' 'a-z'; }
 ig_video() {
   local url="$1" code="$2" slide="$3" silent="$4"
   local tmp="$OUTDIR/.carabiner_src_$$"
-  local -a args=(--cookies-from-browser "$BROWSER" -o "${tmp}.%(ext)s")
+  local -a args=(--cookies-from-browser "$BROWSER" -o "${tmp}.%(ext)s"
+                 --write-info-json --no-write-playlist-metafiles)
   [ -n "$slide" ] && args+=(--playlist-items "$slide")
   [ "$silent" -eq 1 ] && args+=(-f "bv")
   # Ask yt-dlp for the marker format directly rather than screen-scraping its progress bar.
@@ -358,8 +370,12 @@ ig_video() {
   fi
 
   local src
-  src="$(ls "${tmp}".* 2>/dev/null | head -n1)"
+  src="$(ls "${tmp}".* 2>/dev/null | grep -v '\.json$' | head -n1)"
   [ -n "$src" ] || { echo "$log" >&2; return 1; }
+
+  local user
+  user="$(json_field channel "${tmp}.info.json")"
+  [ -n "$user" ] && progress "from:@${user}"
 
   local suffix=""
   [ -n "$slide" ] && suffix="_s${slide}"
@@ -384,7 +400,7 @@ ig_video() {
 ig_gallery() {
   local url="$1" code="$2" slide="$3"
   local tmp; tmp="$(mktemp -d "${TMPDIR:-/tmp}/carabiner_gl_XXXXXX")"
-  local -a args=(--cookies-from-browser "$BROWSER" -D "$tmp" -q)
+  local -a args=(--cookies-from-browser "$BROWSER" -D "$tmp" -q --write-metadata)
   [ -n "$slide" ] && args+=(--range "$slide")
 
   # Keep gallery-dl's own words. This used to run bare and die with a guess — "private
@@ -406,6 +422,13 @@ ig_gallery() {
     reason="$(printf '%s\n' "$log" | grep -v '^\s*$' | tail -n1 \
               | sed -E 's/^\[[^]]+\]\[[^]]+\] //; s/^\[[^]]+\] //')"
     die "gallery-dl failed: ${reason:-no output (exit $rc)}"
+  fi
+
+  local meta user
+  meta="$(find "$tmp" -type f -name '*.json' | head -n1)"
+  if [ -n "$meta" ]; then
+    user="$(json_field username "$meta")"
+    [ -n "$user" ] && progress "from:@${user}"
   fi
 
   local n=0 i=0 f ext base out total

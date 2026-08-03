@@ -35,12 +35,16 @@ trap 'rm -rf "$BIN" "$OUT"' EXIT
 
 # --- stubs -----------------------------------------------------------------
 # gallery-dl: `-g` lists slides (the carousel probe); otherwise it "downloads" into -D.
+# With --write-metadata the real tool drops a pretty-printed `<file>.json` beside every
+# file, containing "username" — the stub models that (shape observed in Task 1), plus a
+# CARABINER_TEST_NOMETA switch standing in for a post/tool that yields no metadata.
 cat > "$BIN/gallery-dl" <<'STUB'
 #!/usr/bin/env bash
-dest=""; prev=""; listing=0
+dest=""; prev=""; listing=0; meta=0
 for a in "$@"; do
   [ "$prev" = "-D" ] && dest="$a"
   [ "$a" = "-g" ] && listing=1
+  [ "$a" = "--write-metadata" ] && meta=1
   prev="$a"
 done
 if [ "$listing" -eq 1 ]; then
@@ -50,6 +54,11 @@ if [ "$listing" -eq 1 ]; then
   exit 0
 fi
 : > "$dest/01.mp4"; : > "$dest/02.jpg"
+if [ "$meta" -eq 1 ] && [ -z "${CARABINER_TEST_NOMETA:-}" ]; then
+  for f in 01.mp4 02.jpg; do
+    printf '{\n    "username": "stubuser",\n    "shortcode": "CODE"\n}\n' > "$dest/$f.json"
+  done
+fi
 exit 0
 STUB
 
@@ -64,10 +73,11 @@ STUB
 # emits a line for `\r`-terminated output. So this honours --newline in its argv.
 cat > "$BIN/yt-dlp" <<'STUB'
 #!/usr/bin/env bash
-out=""; prev=""; newline=0
+out=""; prev=""; newline=0; infojson=0
 for a in "$@"; do
   [ "$prev" = "-o" ] && out="$a"
   [ "$a" = "--newline" ] && newline=1
+  [ "$a" = "--write-info-json" ] && infojson=1
   prev="$a"
 done
 if [ -n "${CARABINER_TEST_NOVIDEO:-}" ]; then
@@ -95,6 +105,10 @@ for p in ("  0.0%", " 50.0%", "100.0%"):
 sys.stdout.write("[download] 100% of 1.00MiB\n")
 sys.stdout.flush()
 '
+if [ "$infojson" -eq 1 ] && [ -z "${CARABINER_TEST_NOMETA:-}" ]; then
+  printf '{"id": "ABC123", "channel": "stubuser", "uploader_id": "17841400000000000", "title": "clip"}' \
+    > "${out/\%(ext)s/info.json}"
+fi
 : > "${out/\%(ext)s/mp4}"
 exit 0
 STUB
@@ -239,6 +253,23 @@ out="$(CARABINER_TEST_DIALOG="Cancel" run 'https://www.instagram.com/p/ABC123/' 
 contains "cancel announces itself" "cancelled." "$out"
 lacks    "cancel saves nothing"    "✓ "          "$out"
 check    "cancel exits zero"       "0"           "$rc"
+
+# 11. The engine names the account. Both Instagram paths read the tool's metadata sidecar
+#     and emit exactly one ::progress:from:@handle marker on stderr — and a post that
+#     yields no metadata degrades to no marker, never to a failure. stdout stays clean
+#     (check 2 already pins that for all markers).
+err="$(run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)"
+contains "video path names the account" "::progress:from:@stubuser" "$err"
+
+err="$(CARABINER_TEST_DIALOG="All 2" run 'https://www.instagram.com/p/ABC123/' 2>&1 >/dev/null)"
+contains "gallery path names the account" "::progress:from:@stubuser" "$err"
+n="$(printf '%s\n' "$err" | grep -c '^::progress:from:' | tr -d ' ')"
+check "exactly one from marker per grab" "1" "$n"
+
+out="$(CARABINER_TEST_NOMETA=1 run 'https://www.instagram.com/reel/ABC123/' 2>/dev/null)"
+contains "no sidecar still saves" "✓ " "$out"
+err="$(CARABINER_TEST_NOMETA=1 run 'https://www.instagram.com/reel/ABC123/' 2>&1 >/dev/null)"
+lacks "no sidecar emits no from marker" "::progress:from" "$err"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
