@@ -60,6 +60,18 @@ enum ProgressParser {
         }
     }
 
+    /// The one marker that is metadata rather than a stage: `::progress:from:@handle`,
+    /// naming the account a grab came from. Kept out of `ProgressEvent` on purpose —
+    /// an event case would force the ring machinery (`ProgressModel.apply`,
+    /// `BannerPlanner.handle`, `beginsActivity`) to each ignore it explicitly.
+    static func parseUser(_ rawLine: String) -> String? {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prefix = marker + "from:"
+        guard line.hasPrefix(prefix) else { return nil }
+        let handle = String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        return handle.isEmpty ? nil : handle
+    }
+
     /// yt-dlp's `%(progress._percent_str)s` is a display string: space-padded, carrying a
     /// percent sign, and literally "N/A" before the total size is known. Parse leniently —
     /// anything unreadable becomes "no data", which creeps, rather than an event we drop.

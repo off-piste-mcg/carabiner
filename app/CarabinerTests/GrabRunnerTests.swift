@@ -220,4 +220,34 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertFalse(result.ok)
         XCTAssertEqual(result.message, "login required — cookies expired?")
     }
+
+    /// The `from` marker rides stderr like every other marker, but lands in the result —
+    /// not in onProgress — because it describes the grab, not a stage of it.
+    func testFromMarkerIsCapturedAsUser() {
+        let stub = writeStub("""
+        echo '::progress:from:@offpiste.mcg' 1>&2
+        echo '  ✓ ABC_fixed.mp4'
+        exit 0
+        """)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.user, "@offpiste.mcg")
+    }
+
+    func testNoFromMarkerMeansNilUser() {
+        let stub = writeStub("echo '  ✓ ABC_fixed.mp4'; exit 0")
+        XCTAssertNil(GrabRunner(executable: stub).run(url: "https://x/y").user)
+    }
+
+    /// The marker filter that keeps progress lines out of failure messages must keep
+    /// covering `from` lines — a failed grab should banner the tool's complaint, not
+    /// the account it would have come from.
+    func testFromLineIsNeverTheFailureReason() {
+        let stub = writeStub("""
+        echo '✗ login required' 1>&2
+        echo '::progress:from:@offpiste.mcg' 1>&2
+        exit 1
+        """)
+        XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "login required")
+    }
 }

@@ -29,4 +29,26 @@ final class ProgressEventTests: XCTestCase {
     func testSaveAloneDoesNotStartARing() {
         XCTAssertFalse(ProgressEvent.save.beginsActivity)
     }
+
+    // MARK: - the `from` metadata marker
+
+    /// `from` is metadata, not a stage: parse() must NOT turn it into an event, or the
+    /// ring machinery grows an ignore-branch for a line that has nothing to do with it.
+    func testFromLineIsNotAProgressEvent() {
+        XCTAssertNil(ProgressParser.parse("::progress:from:@offpiste.mcg"))
+    }
+
+    func testParseUserReadsTheHandleVerbatim() {
+        XCTAssertEqual(ProgressParser.parseUser("::progress:from:@offpiste.mcg"), "@offpiste.mcg")
+    }
+
+    func testParseUserTrimsWhitespace() {
+        XCTAssertEqual(ProgressParser.parseUser("  ::progress:from:@wisse \n"), "@wisse")
+    }
+
+    func testParseUserIgnoresOtherMarkersAndNoise() {
+        XCTAssertNil(ProgressParser.parseUser("::progress:download: 50.0%"))
+        XCTAssertNil(ProgressParser.parseUser("plain log line"))
+        XCTAssertNil(ProgressParser.parseUser("::progress:from:"))   // empty handle is no handle
+    }
 }

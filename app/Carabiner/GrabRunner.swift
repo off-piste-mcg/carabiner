@@ -6,6 +6,9 @@ struct GrabResult {
     /// The user dismissed the carousel dialog. Not a failure to report — the only correct
     /// banner response is silence.
     var cancelled: Bool = false
+    /// `@handle` of the Instagram account the grab came from, when the engine reported
+    /// one (`::progress:from:` marker). Decoration for the banner — nil is normal.
+    var user: String? = nil
 }
 
 struct GrabRunner {
@@ -72,6 +75,7 @@ struct GrabRunner {
         // the reads below, so there is no shared mutable state and no data race.
         var outData = Data()
         var errData = Data()
+        var user: String?
         let group = DispatchGroup()
         let queue = DispatchQueue.global(qos: .userInitiated)
         queue.async(group: group) { outData = outPipe.fileHandleForReading.readDataToEndOfFile() }
@@ -87,10 +91,12 @@ struct GrabRunner {
                 errData.append(chunk)
                 for line in buffer.append(chunk) {
                     if let event = ProgressParser.parse(line) { self.onProgress?(event) }
+                    if let u = ProgressParser.parseUser(line) { user = u }
                 }
             }
-            if let last = buffer.flush(), let event = ProgressParser.parse(last) {
-                self.onProgress?(event)
+            if let last = buffer.flush() {
+                if let event = ProgressParser.parse(last) { self.onProgress?(event) }
+                if let u = ProgressParser.parseUser(last) { user = u }
             }
         }
         group.wait()
@@ -124,8 +130,8 @@ struct GrabRunner {
             let cancelled = outLines.contains("cancelled.")
             return GrabResult(ok: false, message: "Nothing saved", cancelled: cancelled)
         }
-        if saved.count == 1 { return GrabResult(ok: true, message: saved[0]) }
-        return GrabResult(ok: true, message: "\(saved.count) files")
+        if saved.count == 1 { return GrabResult(ok: true, message: saved[0], user: user) }
+        return GrabResult(ok: true, message: "\(saved.count) files", user: user)
     }
 
     /// Non-empty, trimmed lines. Splits on `\r` as well as `\n`: yt-dlp writes its
