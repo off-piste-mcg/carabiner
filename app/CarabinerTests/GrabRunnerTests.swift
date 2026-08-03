@@ -239,6 +239,23 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertNil(GrabRunner(executable: stub).run(url: "https://x/y").user)
     }
 
+    /// The multi-file return is a *separate* `GrabResult(...)` construction from the
+    /// single-file one — `testFromMarkerIsCapturedAsUser` only exercises the latter, so it
+    /// cannot catch a `user: user` that goes missing from just this branch. A carousel is
+    /// exactly the case that hits this path in practice.
+    func testFromMarkerSurvivesTheMultiFileSummary() {
+        let stub = writeStub("""
+        echo '::progress:from:@offpiste.mcg' 1>&2
+        echo '  ✓ ABC_s1.jpg'
+        echo '  ✓ ABC_s2.jpg'
+        exit 0
+        """)
+        let result = GrabRunner(executable: stub).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "2 files")
+        XCTAssertEqual(result.user, "@offpiste.mcg")
+    }
+
     /// The marker filter that keeps progress lines out of failure messages must keep
     /// covering `from` lines — a failed grab should banner the tool's complaint, not
     /// the account it would have come from.
