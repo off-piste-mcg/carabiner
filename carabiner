@@ -371,7 +371,7 @@ ig_video() {
 
   local src
   src="$(ls "${tmp}".* 2>/dev/null | grep -v '\.json$' | head -n1)"
-  [ -n "$src" ] || { echo "$log" >&2; return 1; }
+  [ -n "$src" ] || { rm -f "${tmp}".* 2>/dev/null; echo "$log" >&2; return 1; }
 
   local user
   user="$(json_field channel "${tmp}.info.json")"
