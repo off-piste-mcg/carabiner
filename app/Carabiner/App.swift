@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let controller = MenuBarController()
         menuBar = controller
-        Hotkey.onGrab { [weak controller] in controller?.grab() }
+        Hotkey.onGrab { [weak controller] in controller?.hotkeyFired() }
         // No unconditional notification request any more: on a fresh install the setup
         // window is the only thing that triggers permission prompts, so every prompt
         // appears next to its explanation instead of naked at first launch.

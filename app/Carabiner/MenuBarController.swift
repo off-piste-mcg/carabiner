@@ -50,12 +50,20 @@ final class MenuBarController: NSObject {
         onboarding?.show()
     }
 
-    @objc func grab() {
+    /// The hotkey's entry point. Only a real hotkey fire may satisfy the setup window's
+    /// test — the menu item routes straight to grab(), so clicking it during the 10s
+    /// listen can't fake a ✓ for a chord that never arrived (the false positive the
+    /// test exists to catch).
+    @objc func hotkeyFired() {
         if let test = hotkeyTestHandler {
             hotkeyTestHandler = nil
             test()
             return
         }
+        grab()
+    }
+
+    @objc func grab() {
         // Every outcome below is reported by notification, so if notifications are
         // unavailable the app has no voice at all — a failed grab looks exactly like a
         // dead hotkey. Log each outcome too, so the app stays diagnosable without it.
