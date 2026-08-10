@@ -43,6 +43,17 @@ targets:
           BIN="$TARGET_BUILD_DIR/$WRAPPER_NAME/Contents/Resources/bin"
           [ -d "$BIN" ] || { echo "note: no bundled binaries (run scripts/fetch-deps.sh)"; exit 0; }
 
+          # Notarization requires a secure timestamp on EVERY signature, and this loop
+          # signs ~117 nested Mach-Os. A timestamp is a network round-trip to Apple's TSA
+          # per file, so paying it on every dev build is the kind of friction that gets a
+          # build script abandoned — Debug keeps --timestamp=none, Release earns the wait.
+          # Getting this backwards is invisible until notarytool rejects the whole upload.
+          if [ "${CONFIGURATION:-Debug}" = "Release" ]; then
+            TIMESTAMP_FLAG="--timestamp"
+          else
+            TIMESTAMP_FLAG="--timestamp=none"
+          fi
+
           # Walk the whole tree, not just the top level: the Python tools are PyInstaller
           # --onedir trees (a launcher beside an _internal/ of dylibs and .so files), and
           # every Mach-O in there needs the runtime flag or notarization rejects the app.
@@ -64,7 +75,7 @@ targets:
             # they'd extracted to /tmp, which we hadn't signed — that, and only that, is
             # what needed com.apple.security.cs.disable-library-validation. See gotcha #20.
             codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
-              --options runtime --timestamp=none "$f"
+              --options runtime "$TIMESTAMP_FLAG" "$f"
             codesign --verify --strict "$f"
           done < "$DERIVED_FILE_DIR/machos.txt"
           echo "signed $(wc -l < "$DERIVED_FILE_DIR/machos.txt" | tr -d ' ') Mach-O files under Resources/bin"
@@ -155,6 +166,25 @@ targets:
         # mean the first notarized DMG is the first time anyone runs the real thing.
         # Every dev build now exercises the same restrictions the shipped app will.
         ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        # Distribution signing. Deliberately NOT in base: Debug must keep signing with
+        # Apple Development, because that is what the branded notification depends on
+        # (gotcha #11) and it is what every dev build has always used.
+        Release:
+          # Developer ID needs no provisioning profile — apple-events is a Hardened
+          # Runtime entitlement, not a capability — so Manual signing is both sufficient
+          # and deterministic. Automatic would want -allowProvisioningUpdates and can
+          # silently resolve to a different identity than the one intended.
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          # A DIFFERENT team from CARABINER_TEAM_ID. That one comes from the Apple
+          # Development certificate, which is a personal team; this one is OFF-PISTE B.V.
+          # XcodeGen writes ${VAR} through literally and xcodebuild expands it at BUILD
+          # time, so this resolves from scripts/release.sh's environment.
+          DEVELOPMENT_TEAM: ${CARABINER_RELEASE_TEAM_ID}
+          # The app's own signature needs a secure timestamp too, not just the bundled
+          # binaries the signing loop above covers.
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
   CarabinerTests:
     type: bundle.unit-test
     platform: macOS
