@@ -121,10 +121,91 @@ preflight() {  # $1 = bundle
   note "preflight passed"
 }
 
+# --- pipeline -------------------------------------------------------------------------
+
+build_app() {  # $1 = staging dir; echoes the built .app path
+  local stage="$1"
+  # Derived data goes in the staging temp dir, not the repo: this repo is under
+  # ~/Documents and iCloud's file provider stamps com.apple.FinderInfo on anything that
+  # sits there, which codesign refuses outright (gotcha #13).
+  ( cd "$REPO/app" && xcodegen generate \
+      && xcodebuild -project Carabiner.xcodeproj -scheme Carabiner \
+           -configuration Release -derivedDataPath "$stage/dd" \
+           build ) >"$stage/build.log" 2>&1 \
+    || { tail -30 "$stage/build.log" >&2; die "Release build failed — full log at $stage/build.log"; }
+  printf '%s' "$stage/dd/Build/Products/Release/Carabiner.app"
+}
+
+notarize() {  # $1 = path to .zip or .dmg
+  note "notarizing $(basename "$1") — this takes a few minutes"
+  xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait \
+    || die "notarization failed for $1.
+  Read the log with:
+    xcrun notarytool log <submission-id> --keychain-profile $NOTARY_PROFILE"
+}
+
+make_dmg() {  # $1 = staging dir, $2 = stapled .app, $3 = output dmg path
+  local stage="$1" app="$2" out="$3" root="$1/dmgroot"
+  rm -rf "$root"; mkdir -p "$root"
+  cp -R "$app" "$root/"
+  ln -s /Applications "$root/Applications"
+  # Strip iCloud detritus from the staging tree before it is sealed into the image
+  # (gotcha #13) — cp -R carries xattrs across.
+  xattr -cr "$root"
+  rm -f "$out"
+  hdiutil create -volname "Carabiner" -srcfolder "$root" -ov -format UDZO "$out" \
+    >/dev/null || die "hdiutil failed to build $out"
+}
+
 main() {
+  local version="${1:-}"
+  REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
   require_developer_id_cert
   require_notary_profile
-  note "preconditions ok — team $(developer_id_team)"
+  CARABINER_RELEASE_TEAM_ID="$(developer_id_team)"
+  export CARABINER_RELEASE_TEAM_ID
+  note "signing as team $CARABINER_RELEASE_TEAM_ID"
+
+  # Idempotent; a release without bundled binaries is an app that silently needs Homebrew.
+  "$REPO/scripts/fetch-deps.sh" || die "scripts/fetch-deps.sh failed"
+
+  local stage; stage="$(mktemp -d)"
+  trap 'rm -rf "$stage"' EXIT
+
+  note "building Release"
+  local app; app="$(build_app "$stage")"
+  [ -d "$app" ] || die "no app at $app after a successful build"
+
+  preflight "$app"
+
+  # Notarize the app itself, not just the DMG. Stapling only the DMG leaves the installed
+  # copy relying on an online Gatekeeper check — fine until a colleague first opens it
+  # offline. ditto, not zip: zip mangles symlinks and bundle structure.
+  note "zipping for notarization"
+  ditto -c -k --keepParent "$app" "$stage/Carabiner.zip" || die "ditto failed"
+  notarize "$stage/Carabiner.zip"
+  xcrun stapler staple "$app" || die "stapling the app failed"
+
+  version="${version:-$(defaults read "$app/Contents/Info" CFBundleShortVersionString)}"
+  mkdir -p "$REPO/dist"
+  local dmg="$REPO/dist/Carabiner-$version.dmg"
+
+  note "building $dmg"
+  make_dmg "$stage" "$app" "$stage/Carabiner.dmg"
+  notarize "$stage/Carabiner.dmg"
+  xcrun stapler staple "$stage/Carabiner.dmg" || die "stapling the DMG failed"
+  cp "$stage/Carabiner.dmg" "$dmg"
+
+  note "verifying"
+  xcrun stapler validate "$dmg" || die "stapler validate failed on the DMG"
+  local spctl_out; spctl_out="$(spctl -a -vvv -t install "$app" 2>&1)"
+  [[ "$spctl_out" == *accepted* ]] \
+    || die "spctl rejected the app — Gatekeeper would warn on a teammate's machine:
+  $spctl_out"
+
+  note "done: $dmg"
+  note "publish with: gh release create v$version \"$dmg\" --title \"Carabiner $version\""
 }
 
 # Run only when executed, never when sourced.

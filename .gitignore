@@ -7,6 +7,9 @@
 # Build intermediates (e.g. the generated app icon)
 build/
 
+# Release artifacts from scripts/release.sh — DMGs are ~150 MB, never committed.
+dist/
+
 # macOS
 .DS_Store
 
