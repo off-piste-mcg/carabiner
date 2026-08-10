@@ -56,5 +56,63 @@ chmod +x "$STUB/security"
 actual="$(PATH="$STUB:$PATH" developer_id_team 2>/dev/null)"
 check "no certificate yields empty team" "" "$actual"
 
+# --- preflight gate -------------------------------------------------------------------
+# Driven against a REAL locally-built Debug bundle, not a fabricated fixture. A Debug
+# build genuinely carries get-task-allow and genuinely lacks secure timestamps, so it is
+# a true negative for three of the four gates. A stub that merely echoed the strings we
+# grep for would prove only that grep works — gotcha #23's lesson.
+DEBUG_APP="$HERE/../app/build/Build/Products/Debug/Carabiner.app"
+if [ -d "$DEBUG_APP" ]; then
+  # Debug IS hardened (ENABLE_HARDENED_RUNTIME is on in every build, gotcha #16), so
+  # this gate must PASS on it.
+  (assert_hardened_runtime "$DEBUG_APP") >/dev/null 2>&1
+  check "hardened-runtime gate passes a Debug build" "0" "$?"
+
+  # ...but Debug carries get-task-allow, so this gate must FAIL on it. This is the check
+  # that stops us uploading a Debug build (gotcha #16).
+  (assert_no_get_task_allow "$DEBUG_APP") >/dev/null 2>&1
+  check "get-task-allow gate rejects a Debug build" "1" "$?"
+
+  # ...and Debug signs with --timestamp=none, so this must FAIL on a bundled binary.
+  if [ -e "$DEBUG_APP/Contents/Resources/bin/ffmpeg" ]; then
+    (assert_timestamped "$DEBUG_APP/Contents/Resources/bin/ffmpeg") >/dev/null 2>&1
+    check "timestamp gate rejects an un-timestamped binary" "1" "$?"
+  else
+    printf '  skip timestamp gate (no bundled binaries — run scripts/fetch-deps.sh)\n'
+  fi
+
+  # Debug is signed Apple Development, not Developer ID, so this must FAIL too.
+  (assert_developer_id "$DEBUG_APP") >/dev/null 2>&1
+  check "developer-id gate rejects an Apple Development build" "1" "$?"
+else
+  printf '  skip preflight gate tests (no Debug build — see the plan, Task 1 Step 5)\n'
+fi
+
+# The match path deserves its own test, because that is where the bug was: these gates
+# were originally written as `codesign ... | grep -q`, and under pipefail grep -q's early
+# exit gives codesign a SIGPIPE, so the pipeline reported 141 — failing precisely when
+# the pattern was FOUND. Every negative test above still passed. Only a positive case
+# catches it, so here is a genuinely timestamped binary rather than a fixture.
+#
+# This is the one test that needs the network (a secure timestamp is a round-trip to
+# Apple's TSA, which is the whole reason Debug skips it). It skips rather than fails
+# when offline or when no signing identity is around.
+DEV_ID="$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -nE 's/.*"(Apple Development: [^"]*)".*/\1/p' | head -1)"
+if [ -n "$DEV_ID" ]; then
+  cp /bin/echo "$STUB/timestamped"
+  if codesign --force --sign "$DEV_ID" --options runtime --timestamp \
+       "$STUB/timestamped" >/dev/null 2>&1; then
+    (assert_timestamped "$STUB/timestamped") >/dev/null 2>&1
+    check "timestamp gate ACCEPTS a genuinely timestamped binary" "0" "$?"
+    (assert_hardened_runtime "$STUB/timestamped") >/dev/null 2>&1
+    check "hardened-runtime gate accepts a hardened binary" "0" "$?"
+  else
+    printf '  skip positive timestamp test (codesign --timestamp failed — offline?)\n'
+  fi
+else
+  printf '  skip positive timestamp test (no Apple Development identity)\n'
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

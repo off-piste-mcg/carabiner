@@ -42,6 +42,85 @@ require_notary_profile() {
   from appleid.apple.com (not your account password)."
 }
 
+# --- preflight gate -------------------------------------------------------------------
+# Everything below runs against the built bundle BEFORE anything is uploaded. Each check
+# is a rejection notarytool would hand back as JSON behind a URL twenty minutes later.
+#
+# NOTE ON STYLE, because the obvious spelling is broken here. These all capture codesign's
+# output into a variable and match it with a bash pattern, rather than the natural
+# `codesign -dv "$f" 2>&1 | grep -q PATTERN`. Under `set -o pipefail` that pipeline is
+# actively wrong: grep -q exits the instant it matches, codesign takes SIGPIPE, and the
+# pipeline reports 141 — so the check FAILS exactly when the pattern is FOUND. Every gate
+# here would have rejected a correctly signed Release build, and the get-task-allow gate
+# would have inverted and waved a Debug build through to notarization. Caught by
+# test-release.sh before the first real run; do not "simplify" these back into pipelines.
+
+assert_hardened_runtime() {  # $1 = signed bundle or binary
+  local out; out="$(codesign -dv "$1" 2>&1)"
+  [[ "$out" == *"flags="*"runtime"* ]] \
+    || die "$1 is not signed with the Hardened Runtime.
+  Expected flags=0x10000(runtime). Notarization requires it."
+}
+
+assert_no_get_task_allow() {  # $1 = bundle
+  # Xcode injects this into Debug builds only, and notarization rejects any binary that
+  # carries it (gotcha #16). A Debug build looks identical to a Release one at a glance,
+  # which makes this the likeliest way to waste a round-trip.
+  local ents; ents="$(codesign -d --entitlements - --xml "$1" 2>/dev/null)"
+  if [[ "$ents" == *"get-task-allow"* ]]; then
+    die "$1 carries com.apple.security.get-task-allow — this is a Debug build.
+  Notarization rejects it. Build with -configuration Release."
+  fi
+}
+
+assert_timestamped() {  # $1 = signed bundle or binary
+  # codesign prints "Timestamp=" for a secure timestamp and "Signed Time=" for none, so
+  # the anchor matters: an unanchored match would accept the un-timestamped case, since
+  # "Signed Time=" does not contain "Timestamp=" but a sloppier pattern could.
+  local out; out="$(codesign -dvv "$1" 2>&1)"
+  [[ "$out" == *$'\n'"Timestamp="* || "$out" == "Timestamp="* ]] \
+    || die "$1 has no secure timestamp.
+  Notarization requires one on every signature. Check that CONFIGURATION=Release
+  reached the bundled-binary signing loop in app/project.yml."
+}
+
+assert_developer_id() {  # $1 = bundle
+  # Catches a CARABINER_RELEASE_TEAM_ID that expanded to empty, which produces a build
+  # signed with whatever identity came to hand rather than an outright failure.
+  local out; out="$(codesign -dvv "$1" 2>&1)"
+  [[ "$out" == *"Authority=$IDENTITY"* ]] \
+    || die "$1 is not signed by \"$IDENTITY\".
+  Is CARABINER_RELEASE_TEAM_ID set? Actual authority:
+  $(printf '%s\n' "$out" | sed -n 's/^Authority=/  /p' | head -1)"
+}
+
+preflight() {  # $1 = bundle
+  local app="$1" f count=0
+  note "preflight: $app"
+  assert_hardened_runtime "$app"
+  assert_no_get_task_allow "$app"
+  assert_timestamped "$app"
+  assert_developer_id "$app"
+
+  # Every nested Mach-O too. Resources/ is sealed as data and signed by our own
+  # post-build script (gotcha #19), so it is exactly where an unsigned or un-timestamped
+  # file hides.
+  if [ -d "$app/Contents/Resources/bin" ]; then
+    while IFS= read -r f; do
+      file -b "$f" | grep -q "Mach-O" || continue
+      assert_hardened_runtime "$f"
+      assert_timestamped "$f"
+      count=$((count + 1))
+    done < <(find "$app/Contents/Resources/bin" -type f)
+    note "preflight: $count bundled Mach-Os hardened and timestamped"
+  else
+    die "no Contents/Resources/bin — run scripts/fetch-deps.sh before releasing.
+  Shipping without it produces an app that silently needs Homebrew on the
+  recipient's machine, which is the whole reason bundling exists."
+  fi
+  note "preflight passed"
+}
+
 main() {
   require_developer_id_cert
   require_notary_profile
