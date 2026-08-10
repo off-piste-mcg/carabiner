@@ -185,6 +185,15 @@ targets:
           # The app's own signature needs a secure timestamp too, not just the bundled
           # binaries the signing loop above covers.
           OTHER_CODE_SIGN_FLAGS: "--timestamp"
+          # Without this, `xcodebuild build` injects com.apple.security.get-task-allow
+          # into the signature — in RELEASE too, because the injection is tied to the
+          # build action, not the configuration. Notarization rejects any binary carrying
+          # it (gotcha #16), so the first release run died at the preflight gate on an
+          # honest -configuration Release build. Apple's own answer is archive +
+          # exportArchive, which strips it during export; this setting reaches the same
+          # place without the ExportOptions.plist machinery. Our real entitlements still
+          # apply — they come from CODE_SIGN_ENTITLEMENTS, which this does not touch.
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
   CarabinerTests:
     type: bundle.unit-test
     platform: macOS
