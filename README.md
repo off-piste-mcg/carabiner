@@ -13,6 +13,25 @@ trick — and the reason it can't (and shouldn't) be a website. See
 
 ---
 
+## Download the app (easiest — no Terminal)
+
+1. Download **Carabiner.dmg** from the [latest release](https://github.com/off-piste-mcg/carabiner/releases/latest).
+2. Open it and drag **Carabiner** to your Applications folder.
+3. Open Carabiner from Applications. It lives in the menu bar — there is no window.
+4. A **Setup & Permissions** window opens the first time. Click Allow on each row:
+   notifications, your browser, and System Events. You can reopen it any time from the
+   menu-bar icon.
+5. Open an Instagram post and press **⌃⌥⌘V**. The file lands in `~/Downloads`.
+
+> **One hotkey, one owner.** If you also installed the macOS Shortcut below, unbind its
+> keyboard shortcut first — a global chord belongs to exactly one app, and the loser gets
+> no warning, it just silently never fires.
+
+Everything below is the manual route: the script on its own, and the Shortcut. You don't
+need it if you installed the app.
+
+---
+
 ## Get it (once per Mac)
 
 ```bash
