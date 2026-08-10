@@ -209,6 +209,14 @@ main() {
 }
 
 # Run only when executed, never when sourced.
-if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+#
+# The `-` in ${BASH_SOURCE[0]-} is load-bearing twice over. This repo's login shell is
+# zsh, which does not define BASH_SOURCE at all: under `set -u` the bare form aborts with
+# "parameter not set", and the obvious repair — ${BASH_SOURCE[0]:-$0} — is worse than the
+# bug, because in a sourced zsh script $0 is the script's own path, so the guard would
+# compare equal and `source scripts/release.sh` would start a real build. Defaulting to
+# empty instead means zsh never matches: sourcing defines the functions and runs nothing,
+# which is the behaviour test-release.sh depends on.
+if [ "${BASH_SOURCE[0]-}" = "${0}" ]; then
   main "$@"
 fi
