@@ -684,6 +684,35 @@ from the URL for "just this slide".
     being small and fast, not from anything structural. A future change that pipes a real
     command's output into `grep -q` there inherits this bug.
 
+26. **`xcodebuild build` injects `get-task-allow` into RELEASE builds too — the injection
+    is tied to the build *action*, not the configuration.** Found 2026-08-10 on the very
+    first `scripts/release.sh` run, which died at its own preflight gate with "this is a
+    Debug build" on an honest `-configuration Release` build. That message was right about
+    the entitlement and wrong about the cause, which is the confusing part.
+
+    Gotcha #16 says "notarize Release builds, never a Debug one" and implies choosing
+    Release is sufficient. It isn't. `CODE_SIGN_INJECT_BASE_ENTITLEMENTS` defaults to YES
+    and adds `com.apple.security.get-task-allow` whenever the action is `build`. Apple's
+    intended path is `xcodebuild archive` + `-exportArchive`, where *export* strips it —
+    so projects that always archive never meet this, and projects that build from the CLI
+    meet it immediately. Verified on this repo:
+
+    ```
+    # -configuration Release, before the fix
+    "com.apple.security.automation.apple-events" => true
+    "com.apple.security.get-task-allow" => true
+    ```
+
+    Fix is one setting on the Release config, `CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO`,
+    which lands in the same place as exportArchive without the `ExportOptions.plist`
+    machinery. Our real entitlements are unaffected — they come from
+    `CODE_SIGN_ENTITLEMENTS`, which this does not touch. After it, the Release build
+    carries `apple-events` alone and preflight passes with 117 bundled Mach-Os hardened
+    and timestamped.
+
+    Keep the gate's wording in mind if it ever fires again: "this is a Debug build" is the
+    *likeliest* cause of a stray `get-task-allow`, not the only one.
+
 ## Dependencies
 
 - `yt-dlp` — video (IG/YouTube/etc.)
