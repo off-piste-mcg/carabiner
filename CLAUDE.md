@@ -123,8 +123,10 @@ the zero-install fallback for anyone who doesn't want the app. Both drive the sa
 **Where things are:** `carabiner` (the engine, bash, repo root) · `app/` (the Swift app)
 · `test/` (offline shell tests, no network — `test-path.sh` covers the `CARABINER_BIN`
 resolution order, `test/test-progress.sh` covers the progress markers offline (stubbed
-tools via `CARABINER_BIN`, no network)) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the
-pinned fetch for the bundled binaries) · `.github/workflows/build-deps.yml`
+tools via `CARABINER_BIN`, no network), `test-release.sh` covers `release.sh`'s preflight
+gate against a real local Debug build) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the
+pinned fetch for the bundled binaries; `release.sh`, the Developer ID build → notarize →
+DMG → staple pipeline) · `.github/workflows/build-deps.yml`
 (manual-dispatch CI that builds the bundled ffmpeg/gallery-dl — see "Where we are /
 what's next") · `docs/superpowers/specs/` (design) · `docs/superpowers/plans/`
 (implementation plans) · `files/` (historical reference only, not part of the tool).
@@ -241,6 +243,27 @@ the fact). Phase 2, bundling the binaries, is **partially done**:
   behaviour worth knowing: the **first** run of a freshly installed build costs ~5s while
   Gatekeeper validates the ~117 nested Mach-Os, then it settles. That is per install, not
   per launch — don't chase it as a regression.
+
+**Phase 4 (distribution) is written but UNRUN as of 2026-08-10.** Organization enrolment
+for OFF-PISTE B.V. came through, so it is no longer blocked. In place: a `Release` build
+config in `app/project.yml` (Developer ID Application, Manual signing,
+`CARABINER_RELEASE_TEAM_ID`, `--timestamp`), `scripts/release.sh` (preconditions →
+build → preflight gate → notarize app → DMG → notarize DMG → staple → verify), and
+`test/test-release.sh`. Design and plan:
+`docs/superpowers/specs/2026-08-10-developer-id-distribution-design.md`.
+
+Two manual steps gate the first run, both needing an interactive Apple login: create a
+**Developer ID Application** certificate (Xcode → Settings → Accounts → Manage
+Certificates; Account Holder role), and `xcrun notarytool store-credentials carabiner`
+with an app-specific password. `release.sh` refuses to start without either and prints
+the fix. **Nothing in phase 4 has ever produced a notarized artifact** — treat the first
+run as the real test, and expect the gates to catch something.
+
+Also closed here: README install instructions for app users (phase 2 task 7 step 5).
+One trap left in the open: `releases/latest` resolves to the newest **non-prerelease**
+release, which is currently `deps-2026.07.1`. The README's download link is correct only
+while the app release is newest — publish future `deps-*` releases as **pre-releases** or
+they will steal the link and send teammates to a release with no DMG in it.
 
 ## Working logic (proven — reuse, don't reinvent)
 
@@ -624,6 +647,42 @@ from the URL for "just this slide".
     cleanly if the submitted AppleScript carries the -128 catch) — a stub that just
     echoed "Cancel" would have hidden this bug forever, which is gotcha #23's stub
     lesson again. Check 10 there pins cancel-downloads-nothing.
+
+25. **`cmd | grep -q PATTERN` under `set -o pipefail` fails when the pattern is FOUND.**
+    Found 2026-08-10 writing `scripts/release.sh`'s preflight gate, before the first real
+    release run. `grep -q` exits the instant it matches; the producer then writes into a
+    closed pipe, takes SIGPIPE, and dies with 141. `pipefail` makes the *pipeline* report
+    141 — so the idiom inverts: `codesign -dv "$f" | grep -q runtime || die` fires `die`
+    on a correctly hardened binary and stays quiet on an unsigned one.
+
+    All four gates in `release.sh` were written that way. Three would have rejected a
+    perfectly good Release build with a nonsense message; the fourth,
+    `assert_no_get_task_allow`, inverted into a **false negative** and would have waved a
+    Debug build through to notarization — the exact thing it exists to stop (gotcha #16).
+
+    The fix is to capture and match, never pipe:
+    ```bash
+    local out; out="$(codesign -dv "$1" 2>&1)"
+    [[ "$out" == *"flags="*"runtime"* ]] || die "..."
+    ```
+    **Why it survived the first test run, which is the reusable part:** every gate was
+    tested against a Debug build, where three of the four are *supposed* to fail. They
+    failed, the tests went green, and the bug sat entirely on the untested match path. It
+    took signing a throwaway binary with a real `--timestamp` — an actual positive case,
+    not a fixture — to expose it. A gate tested only on inputs it should reject proves
+    nothing about the inputs it should accept. `test/test-release.sh` now carries both
+    directions for each gate; the positive one skips (rather than fails) when offline,
+    since a secure timestamp needs Apple's TSA.
+
+    This is a bash trap, not a codesign one, and `carabiner` runs under the same
+    `set -uo pipefail`. Its five `grep -q` pipelines (lines 127, 261-262, 267, 365) are
+    all safe, and it is worth knowing exactly why, because the reason is narrower than it
+    looks: every one of them is fed by `echo` or `printf` of a short string, which is
+    written in a single syscall and exits before `grep -q` can close the pipe. Verified
+    in the same shell — `echo … | grep -qiE '^https?://'` returns **0**, while
+    `seq 1 200000 | grep -q '^1$'` returns **141**. The safety comes from the producer
+    being small and fast, not from anything structural. A future change that pipes a real
+    command's output into `grep -q` there inherits this bug.
 
 ## Dependencies
 
