@@ -32,6 +32,48 @@ enum PermissionRow: CaseIterable {
         }
     }
 
+    /// Whether the Automation prompt needs its target app alive before we ask.
+    ///
+    /// AEDeterminePermissionToAutomateTarget returns procNotFound (-600) and shows NOTHING
+    /// when the target is not running, even with ask: true — so asking without launching
+    /// first is a silent no-op that leaves the row exactly where it was.
+    ///
+    /// This used to be true only for the browser: System Events was assumed to be an
+    /// "always-available agent" needing no launch. It is not — it is an on-demand agent
+    /// that quits when idle, so the carousel row could never be turned on (measured
+    /// 2026-08-11: -600 with it stopped, 0 once launched). The rule is a property of the
+    /// row now rather than a comment in one branch.
+    var requiresRunningTarget: Bool {
+        switch self {
+        case .notifications:                return false
+        case .browserAccess, .carouselDialog: return true
+        }
+    }
+
+    /// Whether we may start the target during a PASSIVE status check, not just when the
+    /// user asks for the grant.
+    ///
+    /// This matters because a stopped target is indistinguishable from a refused one:
+    /// both come back procNotFound, so the row renders as off even when the permission is
+    /// granted. System Events idles out within about a minute, so the carousel row would
+    /// spontaneously read off for most of the app's life.
+    ///
+    /// Only true for System Events — a faceless system agent macOS starts constantly, so
+    /// starting it to answer a question costs nothing and is invisible. Never true for the
+    /// browser: launching Chrome because someone opened a settings window would be
+    /// obnoxious, and there the honest "Chrome will open first" note covers it instead.
+    var mayLaunchTargetForStatusCheck: Bool { self == .carouselDialog }
+
+    /// What to warn while the target is not yet running, named per row — telling the
+    /// carousel row that "Chrome will open first" was simply false.
+    var targetLaunchNote: String? {
+        switch self {
+        case .notifications:  return nil
+        case .browserAccess:  return "Chrome will open first"
+        case .carouselDialog: return "System Events will start first"
+        }
+    }
+
     func presentation(for status: PermissionStatus) -> RowPresentation {
         switch status {
         case .granted:
@@ -42,12 +84,8 @@ enum PermissionRow: CaseIterable {
         case .notDetermined:
             return RowPresentation(tick: .pending, buttonTitle: "Allow", action: .request, detail: nil)
         case .targetNotRunning:
-            // The "we'll launch it first" note only makes sense for the browser row.
-            // System Events is an always-available agent that needs no launch dance, so
-            // telling the carousel row that Chrome will open is simply false — it was
-            // invisible while every row rendered in one cramped column.
             return RowPresentation(tick: .pending, buttonTitle: "Allow", action: .request,
-                                   detail: self == .browserAccess ? "Chrome will open first" : nil)
+                                   detail: targetLaunchNote)
         }
     }
 }

@@ -46,13 +46,50 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertEqual(p.detail, "Chrome will open first")
     }
 
-    /// ...but only the browser row. System Events needs no launch dance, so promising the
-    /// carousel row that Chrome will open is a lie. Caught on screen 2026-08-11 once the
-    /// rows had room to show their detail line.
-    func testOnlyTheBrowserRowPromisesToOpenTheBrowser() {
-        for row in PermissionRow.allCases where row != .browserAccess {
-            XCTAssertNil(row.presentation(for: .targetNotRunning).detail,
-                         "\(row.title) should not claim Chrome will open")
+    /// ...and only the browser row mentions the browser. Telling the carousel row that
+    /// Chrome will open is a lie — its target is System Events.
+    func testTargetLaunchNoteNamesTheRightTarget() {
+        XCTAssertEqual(PermissionRow.carouselDialog.presentation(for: .targetNotRunning).detail,
+                       "System Events will start first")
+        XCTAssertNil(PermissionRow.notifications.presentation(for: .targetNotRunning).detail)
+    }
+
+    /// The carousel bug, 2026-08-11: request() skipped the launch dance for System Events
+    /// on the belief it was an "always-available agent". It is not — it quits when idle,
+    /// and AEDeterminePermissionToAutomateTarget then returns procNotFound (-600) and
+    /// shows no prompt, so the switch could never be turned on. Both Automation rows need
+    /// their target alive before asking; notifications needs no target at all.
+    func testBothAutomationRowsRequireARunningTarget() {
+        XCTAssertTrue(PermissionRow.browserAccess.requiresRunningTarget)
+        XCTAssertTrue(PermissionRow.carouselDialog.requiresRunningTarget)
+        XCTAssertFalse(PermissionRow.notifications.requiresRunningTarget)
+    }
+
+    /// A stopped target and a refused one both return procNotFound, so a granted carousel
+    /// permission renders as off whenever System Events has idled out — which is most of
+    /// the time. Starting a faceless system agent to answer that is free; starting the
+    /// user's browser to render a settings row is not.
+    func testOnlySystemEventsMayBeStartedForAPassiveCheck() {
+        XCTAssertTrue(PermissionRow.carouselDialog.mayLaunchTargetForStatusCheck)
+        XCTAssertFalse(PermissionRow.browserAccess.mayLaunchTargetForStatusCheck)
+        XCTAssertFalse(PermissionRow.notifications.mayLaunchTargetForStatusCheck)
+    }
+
+    /// Auto-launching only makes sense for a row that needs a running target at all.
+    func testAutoLaunchImpliesARunningTargetIsRequired() {
+        for row in PermissionRow.allCases where row.mayLaunchTargetForStatusCheck {
+            XCTAssertTrue(row.requiresRunningTarget,
+                          "\(row.title): may auto-launch but claims no target is needed")
+        }
+    }
+
+    /// Every row that must launch something first should say so, and no row that doesn't
+    /// should claim it will. Pins the two properties together so a new row cannot add one
+    /// without the other.
+    func testLaunchNoteExistsExactlyWhenATargetMustRun() {
+        for row in PermissionRow.allCases {
+            XCTAssertEqual(row.requiresRunningTarget, row.targetLaunchNote != nil,
+                           "\(row.title): requiresRunningTarget and targetLaunchNote disagree")
         }
     }
 

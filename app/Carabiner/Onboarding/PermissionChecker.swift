@@ -30,7 +30,13 @@ final class LivePermissionChecker: PermissionChecking {
         case .browserAccess:
             automation(bundleId: browser.bundleId, ask: false, completion: completion)
         case .carouselDialog:
-            automation(bundleId: Self.systemEventsId, ask: false, completion: completion)
+            // Start System Events before asking, or a granted permission reads as off:
+            // the API cannot distinguish "target stopped" from "refused", and System
+            // Events idles out within about a minute. See mayLaunchTargetForStatusCheck.
+            ensureRunning(bundleId: Self.systemEventsId) { running in
+                guard running else { completion(.targetNotRunning); return }
+                self.automation(bundleId: Self.systemEventsId, ask: false, completion: completion)
+            }
         }
     }
 
@@ -49,15 +55,17 @@ final class LivePermissionChecker: PermissionChecking {
                     DispatchQueue.main.async { completion(s) }
                 }
             }
-        case .browserAccess:
-            // The Automation prompt only appears while the target is running.
-            ensureRunning(bundleId: browser.bundleId) { [browser] running in
+        case .browserAccess, .carouselDialog:
+            // Both Automation rows take the same path: the prompt only appears while the
+            // target is running, and the OS returns procNotFound with no prompt otherwise.
+            // System Events used to skip this on the belief it was always available — it
+            // is an on-demand agent that quits when idle, so the carousel switch could
+            // never be turned on. See PermissionRow.requiresRunningTarget.
+            let bundleId = row == .browserAccess ? browser.bundleId : Self.systemEventsId
+            ensureRunning(bundleId: bundleId) { running in
                 guard running else { completion(.targetNotRunning); return }
-                self.automation(bundleId: browser.bundleId, ask: true, completion: completion)
+                self.automation(bundleId: bundleId, ask: true, completion: completion)
             }
-        case .carouselDialog:
-            // System Events is an always-available agent; no launch dance needed.
-            automation(bundleId: Self.systemEventsId, ask: true, completion: completion)
         }
     }
 
