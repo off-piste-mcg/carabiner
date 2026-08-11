@@ -46,6 +46,16 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertEqual(p.detail, "Chrome will open first")
     }
 
+    /// ...but only the browser row. System Events needs no launch dance, so promising the
+    /// carousel row that Chrome will open is a lie. Caught on screen 2026-08-11 once the
+    /// rows had room to show their detail line.
+    func testOnlyTheBrowserRowPromisesToOpenTheBrowser() {
+        for row in PermissionRow.allCases where row != .browserAccess {
+            XCTAssertNil(row.presentation(for: .targetNotRunning).detail,
+                         "\(row.title) should not claim Chrome will open")
+        }
+    }
+
     func testEveryRowHasTitleAndWhy() {
         XCTAssertEqual(PermissionRow.notifications.title, "Notifications")
         XCTAssertEqual(PermissionRow.notifications.why, "So you see when a grab finishes — or why it didn't.")

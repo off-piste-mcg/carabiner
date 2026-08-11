@@ -42,8 +42,12 @@ enum PermissionRow: CaseIterable {
         case .notDetermined:
             return RowPresentation(tick: .pending, buttonTitle: "Allow", action: .request, detail: nil)
         case .targetNotRunning:
+            // The "we'll launch it first" note only makes sense for the browser row.
+            // System Events is an always-available agent that needs no launch dance, so
+            // telling the carousel row that Chrome will open is simply false — it was
+            // invisible while every row rendered in one cramped column.
             return RowPresentation(tick: .pending, buttonTitle: "Allow", action: .request,
-                                   detail: "Chrome will open first")
+                                   detail: self == .browserAccess ? "Chrome will open first" : nil)
         }
     }
 }
