@@ -376,6 +376,24 @@ from the URL for "just this slide".
     carries a `postBuildScripts` phase that runs `xattr -cr` on the bundle — post-build
     scripts run *before* Xcode's CodeSign step, which is why that is the right hook.
 
+    **The strip is a race, not a fix — build outside iCloud instead (2026-08-11).** The
+    xattr strip only wins if the file provider does not re-stamp the bundle between it and
+    CodeSign, and under sync pressure it loses. It lost repeatedly on 2026-08-11 while
+    iCloud was uploading two 72 MB DMGs sitting in `dist/`: the *first* `xcodebuild` after
+    a test run failed with the detritus error every time, and a retry usually passed —
+    which is exactly the shape that gets misread as a flake and worked around.
+
+    The real fix is to keep the build products out of iCloud entirely, by pointing
+    `-derivedDataPath` somewhere unsynced:
+    ```bash
+    xcodebuild -project Carabiner.xcodeproj -scheme Carabiner \
+      -configuration Debug -derivedDataPath /tmp/carabiner-dd build
+    ```
+    Measured: **3/3 consecutive clean builds** to `/tmp` versus repeated failures to
+    `app/build`, and the iCloud-built bundle carried 3 xattrs against 1. This is also why
+    `scripts/release.sh` has never once hit it — it stages into `mktemp -d`. Keep the
+    strip anyway: it is what protects the release path's final bundle root.
+
 14. **A global hotkey is exclusive, and losing it is silent.** `RegisterEventHotKey` fails
     outright if another app already owns the chord — and neither it nor the
     `KeyboardShortcuts` package reports that. While the macOS Shortcut was still bound to
