@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 /// The four states a permission row can be in. `targetNotRunning` exists because the
 /// Automation prompt (and even the passive check) needs the target app alive — a closed
@@ -52,4 +53,42 @@ struct RowPresentation: Equatable {
     let buttonTitle: String?
     let action: PermissionRow.Action
     let detail: String?
+}
+
+/// The notifications row's verdict, kept pure so it can be tested — the OS values it
+/// judges come from APIs a test runner cannot drive.
+///
+/// Granted requires BOTH that we are authorized AND that alerts are actually visible.
+/// Authorization can be on while the alert style is "None", in which case notifications
+/// land silently in Notification Centre and never appear on screen. For Carabiner that is
+/// indistinguishable from broken: the banner is the whole feature, and a grab that
+/// finishes invisibly looks exactly like a hotkey that never fired (gotchas #14, #22).
+///
+/// Both failures return .denied rather than a new case, because the user's action is the
+/// same either way — open System Settings and fix it.
+func notificationStatus(authorization: UNAuthorizationStatus,
+                        alert: UNNotificationSetting) -> PermissionStatus {
+    switch authorization {
+    case .authorized, .provisional:
+        return alert == .enabled ? .granted : .denied
+    case .denied:
+        return .denied
+    default:
+        return .notDetermined
+    }
+}
+
+extension PermissionRow.Tick {
+    /// Verified present on the macOS 13 floor by PermissionModelsTests.
+    var symbolName: String {
+        switch self {
+        case .ok:      return "checkmark.circle.fill"
+        case .cross:   return "exclamationmark.triangle.fill"
+        case .pending: return "circle.dotted"
+        }
+    }
+
+    /// Drives the row's tint. Only a cross is a problem the user must act on; pending is
+    /// merely "not asked yet" and should not read as an error.
+    var isFailure: Bool { self == .cross }
 }

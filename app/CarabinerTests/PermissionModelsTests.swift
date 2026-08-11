@@ -1,4 +1,6 @@
 import XCTest
+import AppKit
+import UserNotifications
 @testable import Carabiner
 
 /// Row state is pure data → presentation so it can be tested at all: the real statuses
@@ -59,5 +61,57 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertEqual(Browser.brave.bundleId, "com.brave.Browser")
         XCTAssertEqual(Browser.edge.bundleId, "com.microsoft.edgemac")
         XCTAssertEqual(Browser.arc.bundleId, "company.thebrowser.Browser")
+    }
+
+    // MARK: - notification verdict
+    //
+    // The reported bug (2026-08-11): the row reported granted straight from
+    // requestAuthorization's callback flag, so an authorization that did not take showed
+    // a green tick and no banners. The verdict below is what the row must ask instead.
+
+    func testAuthorizedWithAlertsEnabledIsGranted() {
+        XCTAssertEqual(notificationStatus(authorization: .authorized, alert: .enabled), .granted)
+    }
+
+    /// The sibling of the reported bug: allowed, but the alert style is None, so banners
+    /// never appear. For Carabiner the banner IS the feature — silent delivery is a
+    /// failure, and the remedy is the same as a denial.
+    func testAuthorizedWithAlertsDisabledIsDenied() {
+        XCTAssertEqual(notificationStatus(authorization: .authorized, alert: .disabled), .denied)
+    }
+
+    func testDeniedIsDenied() {
+        XCTAssertEqual(notificationStatus(authorization: .denied, alert: .enabled), .denied)
+    }
+
+    func testNotDeterminedOffersAllowAgain() {
+        XCTAssertEqual(notificationStatus(authorization: .notDetermined, alert: .notSupported),
+                       .notDetermined)
+    }
+
+    func testProvisionalWithAlertsEnabledIsGranted() {
+        XCTAssertEqual(notificationStatus(authorization: .provisional, alert: .enabled), .granted)
+    }
+
+    /// Provisional authorization delivers quietly by default — exactly the invisible case.
+    func testProvisionalWithAlertsDisabledIsDenied() {
+        XCTAssertEqual(notificationStatus(authorization: .provisional, alert: .disabled), .denied)
+    }
+
+    // MARK: - tick symbols
+
+    /// All three must resolve on the deployment target, or the row renders an empty gap
+    /// where its status should be — a silent, purely visual failure.
+    func testTickSymbolsResolve() {
+        for tick in [PermissionRow.Tick.ok, .cross, .pending] {
+            XCTAssertNotNil(NSImage(systemSymbolName: tick.symbolName, accessibilityDescription: nil),
+                            "SF Symbol missing: \(tick.symbolName)")
+        }
+    }
+
+    func testOnlyCrossIsFailure() {
+        XCTAssertTrue(PermissionRow.Tick.cross.isFailure)
+        XCTAssertFalse(PermissionRow.Tick.ok.isFailure)
+        XCTAssertFalse(PermissionRow.Tick.pending.isFailure)
     }
 }
