@@ -82,6 +82,36 @@ func notificationStatus(authorization: UNAuthorizationStatus,
     }
 }
 
+/// What flipping a row's switch should actually do.
+///
+/// macOS gives an app no way to revoke its own grants, and no way to grant one that was
+/// already refused — `requestAuthorization` returns immediately once the user has decided,
+/// without showing anything. So only one of these three transitions can be performed in
+/// process; the rest hand off to System Settings, which is the sole place the user can
+/// actually change their mind.
+enum ToggleIntent: Equatable {
+    /// Ask the OS to prompt. Only legal from an undecided state.
+    case request
+    /// Deep-link to the relevant System Settings pane — the switch will not move until
+    /// the user changes it there, which is the honest outcome.
+    case openSystemSettings
+    /// Already in the requested state.
+    case nothing
+}
+
+func toggleAction(desired: Bool, status: PermissionStatus) -> ToggleIntent {
+    if desired {
+        switch status {
+        case .granted:                        return .nothing
+        case .notDetermined, .targetNotRunning: return .request
+        case .denied:                         return .openSystemSettings
+        }
+    } else {
+        // Turning OFF is never something we can do ourselves, whatever the current state.
+        return status == .granted ? .openSystemSettings : .nothing
+    }
+}
+
 extension PermissionRow.Tick {
     /// Verified present on the macOS 13 floor by PermissionModelsTests.
     var symbolName: String {

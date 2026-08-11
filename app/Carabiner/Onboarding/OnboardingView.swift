@@ -9,12 +9,12 @@ struct OnboardingView: View {
         Form {
             Section {
                 ForEach(PermissionRow.allCases, id: \.self) { row in
-                    let p = model.presentation(for: row)
-                    SetupRow(tick: p.tick,
-                             title: row.title,
-                             why: row.why,
-                             detail: p.detail,
-                             buttonTitle: p.buttonTitle) { model.act(on: row) }
+                    PermissionToggleRow(title: row.title,
+                                        why: row.why,
+                                        detail: model.presentation(for: row).detail,
+                                        isOn: model.isOn(row)) { desired in
+                        model.setEnabled(desired, for: row)
+                    }
                 }
                 SetupRow(tick: model.hotkey.tick,
                          title: "Hotkey",
@@ -59,7 +59,48 @@ struct OnboardingView: View {
     }
 }
 
-/// One row: SF Symbol status, name + reason, optional detail, optional action button.
+/// A permission row: name + reason on the left, a switch on the right, matching how
+/// System Settings presents the same grants.
+///
+/// The switch is bound to the OS's answer, never to local state. Flipping it sends an
+/// intent; the value only moves once the OS agrees. Turning one off opens System Settings
+/// and leaves the switch on, because macOS gives an app no way to revoke its own grant —
+/// that is honest rather than broken, and the alternative (animating off, then snapping
+/// back) would claim something untrue.
+private struct PermissionToggleRow: View {
+    let title: String
+    let why: String
+    let detail: String?
+    let isOn: Bool
+    let onIntent: (Bool) -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body)
+                Text(why).font(.callout).foregroundStyle(.secondary)
+                if let detail {
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer(minLength: 8)
+
+            Toggle("", isOn: Binding(get: { isOn }, set: { onIntent($0) }))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .accessibilityLabel(title)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// The hotkey row. Not a permission — there is nothing to grant, only evidence to gather
+/// by listening (gotcha #14) — so it gets a button rather than a switch.
+///
+/// Its status symbol sits on the TRAILING edge, where the permission rows put their
+/// switches. A leading symbol column would indent this row's title ~55pt past the other
+/// three, since they have no such column.
 private struct SetupRow: View {
     let tick: PermissionRow.Tick
     let title: String
@@ -70,13 +111,6 @@ private struct SetupRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: tick.symbolName)
-                .foregroundStyle(tick == .ok ? Color.green
-                                 : tick.isFailure ? Color.red : Color.secondary)
-                .font(.body)
-                .frame(width: 18)
-                .padding(.top, 1)
-
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.body)
                 Text(why).font(.callout).foregroundStyle(.secondary)
@@ -89,6 +123,13 @@ private struct SetupRow: View {
 
             if let buttonTitle {
                 Button(buttonTitle, action: action)
+            } else {
+                // No button means the test resolved; the symbol carries the result.
+                Image(systemName: tick.symbolName)
+                    .foregroundStyle(tick == .ok ? Color.green
+                                     : tick.isFailure ? Color.red : Color.secondary)
+                    .font(.body)
+                    .padding(.top, 2)
             }
         }
         .padding(.vertical, 2)

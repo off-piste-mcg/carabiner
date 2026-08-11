@@ -108,6 +108,34 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertEqual(notificationStatus(authorization: .provisional, alert: .disabled), .denied)
     }
 
+    // MARK: - toggle intent
+    //
+    // macOS lets an app prompt once and never again: it cannot revoke its own grant, and
+    // cannot re-ask after a refusal. So exactly one transition is performable in process
+    // and every other flip has to hand off to System Settings.
+
+    func testTurningOnAnUndecidedPermissionPrompts() {
+        XCTAssertEqual(toggleAction(desired: true, status: .notDetermined), .request)
+        XCTAssertEqual(toggleAction(desired: true, status: .targetNotRunning), .request)
+    }
+
+    /// Re-asking after a refusal does nothing at all — requestAuthorization returns
+    /// instantly with no prompt — so the switch must send the user somewhere real.
+    func testTurningOnADeniedPermissionOpensSystemSettings() {
+        XCTAssertEqual(toggleAction(desired: true, status: .denied), .openSystemSettings)
+    }
+
+    /// The whole reason the switch cannot behave like a switch.
+    func testTurningOffAlwaysOpensSystemSettings() {
+        XCTAssertEqual(toggleAction(desired: false, status: .granted), .openSystemSettings)
+    }
+
+    func testNoOpTransitionsDoNothing() {
+        XCTAssertEqual(toggleAction(desired: true, status: .granted), .nothing)
+        XCTAssertEqual(toggleAction(desired: false, status: .denied), .nothing)
+        XCTAssertEqual(toggleAction(desired: false, status: .notDetermined), .nothing)
+    }
+
     // MARK: - tick symbols
 
     /// All three must resolve on the deployment target, or the row renders an empty gap

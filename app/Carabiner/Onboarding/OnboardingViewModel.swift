@@ -31,6 +31,26 @@ final class OnboardingViewModel: ObservableObject {
         row.presentation(for: statuses[row] ?? .notDetermined)
     }
 
+    func isOn(_ row: PermissionRow) -> Bool { statuses[row] == .granted }
+
+    /// The switch reports an intent, not a new state. Where the OS lets us act we act;
+    /// otherwise we open System Settings and re-read — so the switch lands wherever the
+    /// truth is, which may be exactly where it started. See toggleAction.
+    func setEnabled(_ desired: Bool, for row: PermissionRow) {
+        checker.status(for: row) { [weak self] status in
+            guard let self else { return }
+            switch toggleAction(desired: desired, status: status) {
+            case .request:
+                self.checker.request(row) { [weak self] _ in self?.refresh(row) }
+            case .openSystemSettings:
+                self.checker.openSystemSettings(for: row)
+                self.refresh(row)
+            case .nothing:
+                self.refresh(row)
+            }
+        }
+    }
+
     func act(on row: PermissionRow) {
         checker.status(for: row) { [weak self] status in
             guard let self else { return }
