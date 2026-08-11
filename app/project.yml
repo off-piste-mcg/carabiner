@@ -138,8 +138,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner
-        MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.1"
+        CURRENT_PROJECT_VERSION: "2"
         GENERATE_INFOPLIST_FILE: NO
         # Signing is NOT deferrable to the distribution phase. macOS refuses to register
         # an ad-hoc/linker-signed bundle for user notifications: requestAuthorization

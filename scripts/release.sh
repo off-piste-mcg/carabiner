@@ -137,6 +137,12 @@ build_app() {  # $1 = staging dir; echoes the built .app path
 }
 
 notarize() {  # $1 = path to .zip or .dmg
+  # Re-checked before EVERY submission, not just at startup. Notarization can take hours,
+  # and the login keychain locks while the Mac idles — on 2026-08-11 the first run cleared
+  # the app submission after five hours and then died on the DMG with "No Keychain
+  # password item found", discarding the build. A locked keychain is recoverable; losing
+  # the artifact to the exit trap was the expensive part.
+  require_notary_profile
   note "notarizing $(basename "$1") — this takes a few minutes"
   xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait \
     || die "notarization failed for $1.
@@ -171,7 +177,12 @@ main() {
   "$REPO/scripts/fetch-deps.sh" || die "scripts/fetch-deps.sh failed"
 
   local stage; stage="$(mktemp -d)"
-  trap 'rm -rf "$stage"' EXIT
+  # Keep the staging tree on failure. An unconditional cleanup here threw away a signed,
+  # notarized, stapled app because the DMG step failed afterwards — hours of notarization
+  # discarded for a locked keychain. On success there is nothing worth keeping.
+  trap 'rc=$?; if [ "$rc" -ne 0 ]; then
+          printf "release: staging kept for retry: %s\n" "'"$stage"'" >&2
+        else rm -rf "'"$stage"'"; fi' EXIT
 
   note "building Release"
   local app; app="$(build_app "$stage")"
