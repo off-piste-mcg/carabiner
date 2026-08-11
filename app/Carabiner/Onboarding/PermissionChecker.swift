@@ -23,12 +23,8 @@ final class LivePermissionChecker: PermissionChecking {
         switch row {
         case .notifications:
             UNUserNotificationCenter.current().getNotificationSettings { settings in
-                let s: PermissionStatus
-                switch settings.authorizationStatus {
-                case .authorized, .provisional: s = .granted
-                case .denied:                   s = .denied
-                default:                        s = .notDetermined
-                }
+                let s = notificationStatus(authorization: settings.authorizationStatus,
+                                           alert: settings.alertSetting)
                 DispatchQueue.main.async { completion(s) }
             }
         case .browserAccess:
@@ -41,9 +37,17 @@ final class LivePermissionChecker: PermissionChecking {
     func request(_ row: PermissionRow, completion: @escaping (PermissionStatus) -> Void) {
         switch row {
         case .notifications:
-            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            // The `granted` flag is deliberately ignored. It reports what the prompt
+            // returned, not what the system ended up with — on 2026-08-11 a user allowed
+            // the prompt and still had "Allow notifications" switched off, so the row went
+            // green while nothing was ever delivered. Ask the OS what is actually true.
+            UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, error in
                 if let error { NSLog("Carabiner: notification authorization failed: %@", error.localizedDescription) }
-                DispatchQueue.main.async { completion(granted ? .granted : .denied) }
+                UNUserNotificationCenter.current().getNotificationSettings { settings in
+                    let s = notificationStatus(authorization: settings.authorizationStatus,
+                                               alert: settings.alertSetting)
+                    DispatchQueue.main.async { completion(s) }
+                }
             }
         case .browserAccess:
             // The Automation prompt only appears while the target is running.
