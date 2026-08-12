@@ -27,7 +27,9 @@ final class MenuBarController: NSObject {
         if renderer.mark == nil { NSLog("Carabiner: StatusIcon asset missing — status item has no image") }
         ring = RingAnimator(button: statusItem.button, renderer: renderer)
         let menu = NSMenu()
-        let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab), keyEquivalent: "")
+        // Disambiguated: grab() now has a same-named overload (grab(url:browser:...)) for
+        // the explicit-URL path, so #selector needs the no-arg signature spelled out.
+        let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab as () -> Void), keyEquivalent: "")
         grabItem.target = self
         menu.addItem(grabItem)
         let setupItem = NSMenuItem(title: "Setup & Permissions…", action: #selector(showOnboarding), keyEquivalent: "")
@@ -63,6 +65,10 @@ final class MenuBarController: NSObject {
         }
         grab()
     }
+
+    /// The server refuses a second concurrent grab rather than queueing it — see
+    /// GrabServer's 409 path.
+    var isBusy: Bool { busy }
 
     @objc func grab() {
         // Every outcome below is reported by notification, so if notifications are
@@ -100,8 +106,27 @@ final class MenuBarController: NSObject {
             ring.finish(success: false)
             return
         }
-        NSLog("Carabiner: grabbing %@", url)
+        grab(url: url, browser: Self.browser)
+    }
+
+    /// The shared grab path. The hotkey reaches it after resolving the front tab; the
+    /// browser button reaches it with a URL the page already knew. Both share `busy`,
+    /// the ring and the notifier — two independent paths would double-post banners.
+    ///
+    /// `grabStarted()` is NOT posted here: the hotkey posts it before the AppleScript
+    /// tab read, which is itself part of the wait. The button's caller posts it instead.
+    func grab(url: String,
+              browser: Browser,
+              observer: ((ProgressEvent) -> Void)? = nil,
+              userObserver: ((String) -> Void)? = nil,
+              completion: ((GrabResult) -> Void)? = nil) {
+        NSLog("Carabiner: grabbing %@ (cookies: %@)", url, browser.rawValue)
         busy = true
+        // GrabRunner is a struct, so this copy — not a mutation of the shared `runner`
+        // property — is what lets each grab set its own `browser` without one caller's
+        // choice leaking into another's concurrent-looking-but-actually-serial grab.
+        var runner = self.runner
+        runner.browser = browser
         runner.onProgress = { [weak self] event in
             // onProgress arrives on GrabRunner's background queue; the ring and the
             // notifier's planner state are both main-only.
@@ -116,18 +141,21 @@ final class MenuBarController: NSObject {
                 // the gate keeps "no ring" and "ring ignores this" from blurring.
                 if self.ringStarted { self.ring.handle(event) }
                 self.notifier.handle(event)
+                observer?(event)
             }
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let result = self.runner.run(url: url)
+            let result = runner.run(url: url)
             DispatchQueue.main.async {
                 NSLog("Carabiner: grab %@ — %@",
                       result.ok ? "succeeded" : (result.cancelled ? "cancelled" : "failed"),
                       result.message)
+                if let user = result.user { userObserver?(user) }
                 self.ring.finish(success: result.ok)
                 self.notifier.finished(result)
                 self.busy = false
+                completion?(result)
             }
         }
     }
