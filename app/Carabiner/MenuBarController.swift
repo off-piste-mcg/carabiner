@@ -84,8 +84,10 @@ final class MenuBarController: NSObject {
         // and sat frozen beside the dialog, both of which read as a download that had
         // already begun. Immediate feedback is the working banner's job (grabStarted(),
         // next line); the failure paths below call ring.finish() unconditionally, which
-        // is a no-op on a ring that never began.
-        ringStarted = false
+        // is a no-op on a ring whose timer was never started — that no-op is governed by
+        // RingAnimator's own `timer` state, not by `ringStarted`, so resetting
+        // `ringStarted` only in the shared grab(url:browser:...) below (rather than here
+        // too) does not change what these early returns do.
         // Before reading the tab, not after: resolve() drives AppleScript on this thread
         // and is itself part of the delay the user is waiting through. Any outcome below
         // takes this banner down and posts its own, so an early failure still shows
@@ -109,17 +111,37 @@ final class MenuBarController: NSObject {
         grab(url: url, browser: Self.browser)
     }
 
-    /// The shared grab path. The hotkey reaches it after resolving the front tab; the
-    /// browser button reaches it with a URL the page already knew. Both share `busy`,
-    /// the ring and the notifier — two independent paths would double-post banners.
+    /// The shared grab path. The hotkey reaches it after resolving the front tab; a
+    /// future non-hotkey caller (the browser-extension server, a later task) will reach
+    /// it with a URL the caller already had. Both share `busy`, the ring and the
+    /// notifier — two independent paths would double-post banners.
     ///
-    /// `grabStarted()` is NOT posted here: the hotkey posts it before the AppleScript
-    /// tab read, which is itself part of the wait. The button's caller posts it instead.
+    /// `grabStarted()` is NOT posted here: the hotkey path posts it itself, before the
+    /// AppleScript tab read, because that read is itself part of the wait the working
+    /// banner is covering. `notifier` is private, so no other caller can post it that
+    /// way today — a future non-hotkey caller will need an internal helper on this class
+    /// to post the working banner before calling this method. That helper does not exist
+    /// yet and is out of scope here.
+    ///
+    /// Threading contract (on the caller, not enforced by this method): MUST be called
+    /// on the main queue — it reads/writes `busy` and touches `ring` and `notifier`,
+    /// none of which are thread-safe. `observer`, `userObserver` and `completion` are
+    /// all invoked on the main queue in turn, so a caller on another queue (e.g. an HTTP
+    /// server's request-handler queue) must hop to main before calling in, not assume
+    /// this method will do it.
     func grab(url: String,
               browser: Browser,
               observer: ((ProgressEvent) -> Void)? = nil,
               userObserver: ((String) -> Void)? = nil,
               completion: ((GrabResult) -> Void)? = nil) {
+        // Per-grab state. This is the one place both callers (the hotkey, after its own
+        // tab-read failure paths return early, and any future direct caller) funnel
+        // through before work begins, and `ringStarted` is read only inside the
+        // onProgress closure installed below — so resetting it here, ahead of that
+        // closure's installation, is sufficient. It no longer also lives in grab()'s
+        // early lines; see the comment there for why removing it doesn't change that
+        // method's early-return behaviour.
+        ringStarted = false
         NSLog("Carabiner: grabbing %@ (cookies: %@)", url, browser.rawValue)
         busy = true
         // GrabRunner is a struct, so this copy — not a mutation of the shared `runner`
