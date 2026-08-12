@@ -253,9 +253,30 @@ it.
 
 **Must be verified before the design is trusted, not assumed:**
 
-1. **Does Safari send `Origin` on a background-script `fetch`?** The whole access-control
-   design rests on it. If it does not, the fallback is a pairing token surfaced in the
-   onboarding window. Verify empirically before building on it.
+1. ~~**Does Safari send `Origin` on a background-script `fetch`?**~~ **VERIFIED 2026-08-12
+   — both browsers do, and the design holds.** Measured against a throwaway listener that
+   recorded raw request headers, with the extension loaded unpacked in Chrome and built
+   through `safari-web-extension-converter` for Safari:
+
+   - Chrome → `Origin: chrome-extension://ccngbaicbbcdhbppljflaagmbfpcjjcn` (matches the
+     extension ID exactly)
+   - Safari → `Origin: safari-web-extension://dcea6524-ab56-4469-895f-d4f4e84f139e`
+     (a per-install UUID, which is why exact-ID allowlisting was never an option)
+
+   **Two things the measurement changed, both worth more than the yes/no answer:**
+
+   - **Safari sends a CORS preflight `OPTIONS`; Chrome does not.** Chrome skips it because
+     `http://127.0.0.1:51847/*` is in `host_permissions`; Safari preflights anyway. So
+     `GrabServer`'s `OPTIONS` handler is **load-bearing for Safari**, not defensive
+     politeness — remove it and Safari silently stops working while Chrome carries on
+     fine, which is the worst shape a bug can have.
+   - **The MV3 service worker is ephemeral and Safari kills it when idle.** It disappears
+     from Develop → Web Extension Background Content mid-session, so any procedure that
+     depends on catching it in an inspector console is unreliable. The measurement was
+     taken by making the worker fire its request at startup instead. This matters beyond
+     testing: the worker holds the streaming connection for the whole grab, so a long
+     carousel must keep it alive. An in-flight `fetch` does reset the idle timer, but this
+     is worth re-checking against a genuinely long grab before trusting it.
 2. **Safari cookies may need Full Disk Access.** `--cookies-from-browser safari` reads
    `~/Library/Containers/com.apple.Safari/…/Cookies.binarycookies`, which is TCC-protected.
    If Carabiner needs FDA to read it, that is another onboarding row and a materially
