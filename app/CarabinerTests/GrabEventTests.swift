@@ -26,6 +26,25 @@ final class GrabEventTests: XCTestCase {
     func testPromptIsItsOwnStage() {
         XCTAssertEqual(decode(GrabEvent.line(for: .prompt))["stage"] as? String, "prompt")
     }
+    func testProbeIsItsOwnStage() {
+        XCTAssertEqual(decode(GrabEvent.line(for: .probe))["stage"] as? String, "probe")
+    }
+    func testSaveIsItsOwnStage() {
+        XCTAssertEqual(decode(GrabEvent.line(for: .save))["stage"] as? String, "save")
+    }
+    // .convert is the one ProgressEvent case whose wire form carries real logic
+    // (mode.rawValue), not just a bare stage string — worth pinning both raw values so a
+    // rename/refactor of ConvertMode can't silently change or break this field unnoticed.
+    func testConvertCarriesRemuxMode() {
+        let o = decode(GrabEvent.line(for: .convert(.remux)))
+        XCTAssertEqual(o["stage"] as? String, "convert")
+        XCTAssertEqual(o["mode"] as? String, "remux")
+    }
+    func testConvertCarriesEncodeMode() {
+        let o = decode(GrabEvent.line(for: .convert(.encode)))
+        XCTAssertEqual(o["stage"] as? String, "convert")
+        XCTAssertEqual(o["mode"] as? String, "encode")
+    }
     func testUserLine() {
         XCTAssertEqual(decode(GrabEvent.line(forUser: "@offpiste"))["from"] as? String, "@offpiste")
     }
