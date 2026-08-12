@@ -146,8 +146,9 @@ things. Two gates, no pairing token and no setup step:
    worker**. A `fetch` from the content script carries `https://www.instagram.com` as its
    origin and would be rejected — correctly.
 2. **URL allowlist, server-side.** Only Instagram/YouTube/Pinterest URL patterns are
-   accepted, so even a request that somehow cleared gate 1 cannot point `yt-dlp` at an
-   arbitrary address. Anything else → `400`. **`https` only** — an extension will only
+   accepted, so a request that somehow cleared gate 1 still cannot *submit* an arbitrary
+   address to `yt-dlp` — though see the redirect limit below, which is why this is
+   defence in depth and not a boundary. Anything else → `400`. **`https` only** — an extension will only
    ever see https on these hosts, and allowing plain http would widen the redirect seam
    below to any on-path attacker.
 
