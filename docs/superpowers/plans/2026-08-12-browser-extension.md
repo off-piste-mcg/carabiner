@@ -15,7 +15,8 @@
 - **Port is fixed at `51847`**, bound to `127.0.0.1` only — never `0.0.0.0`. On bind failure the app surfaces it in onboarding; it must NOT silently pick another port.
 - **Only two accepted origin schemes:** `chrome-extension://` and `safari-web-extension://`. No exact-ID allowlist (Safari's origin is a random per-install UUID).
 - **The POST must be sent from the extension's background service worker**, never a content script — a content-script fetch carries `https://www.instagram.com` and is correctly rejected.
-- **Server-side URL allowlist:** Instagram (`/p/`, `/reel/`, `/reels/`, `/tv/`), YouTube, Pinterest only. Everything else → `400`.
+- **Server-side URL allowlist:** Instagram (`/p/`, `/reel/`, `/reels/`, `/tv/`), YouTube, Pinterest only, **`https` only**. Everything else → `400`.
+- **A gate returns its *parsed* value, never the caller's raw string.** Corrected in Task 3's review: returning the input verbatim let `…/p/C1/\r\nX-Injected: 1` through with the CRLF intact, into a value the listener echoes into a response header. Origins are character-set validated for the same reason. Task 3's Step 3 code below predates this and is superseded by the fix commit — read the file, not the plan, for the current gate.
 - **One grab at a time.** A second `POST /grab` while busy → `409`.
 - **The extension contains no download code.** No API scraping, no CDN URLs, no `chrome.downloads`.
 - **The bash engine (`carabiner`) is not modified by this plan.** If a task seems to need an engine change, stop and escalate.

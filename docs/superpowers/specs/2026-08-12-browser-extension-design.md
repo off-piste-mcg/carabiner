@@ -147,7 +147,35 @@ things. Two gates, no pairing token and no setup step:
    origin and would be rejected — correctly.
 2. **URL allowlist, server-side.** Only Instagram/YouTube/Pinterest URL patterns are
    accepted, so even a request that somehow cleared gate 1 cannot point `yt-dlp` at an
-   arbitrary address. Anything else → `400`.
+   arbitrary address. Anything else → `400`. **`https` only** — an extension will only
+   ever see https on these hosts, and allowing plain http would widen the redirect seam
+   below to any on-path attacker.
+
+**Two corrections earned in review, 2026-08-12, before the listener existed.** Both were
+defects in this document's own first draft, found by re-implementing the gate standalone
+and running ~50 hostile inputs through it:
+
+- **The gate must return the *parsed* URL, never the caller's raw string.** The first
+  draft returned the input verbatim on success. `https://www.instagram.com/p/C1/\r\nX-Injected: 1`
+  cleared both gates and came back with the CRLF intact — and this value is echoed into
+  an HTTP response header, so that is header injection. The same applies to the origin:
+  `chrome-extension://a\r\nAccess-Control-Allow-Credentials: true` passed a bare prefix
+  check. The gate now validates the origin's character set (a serialised origin is
+  scheme + host + port, never a path) and returns `parsed.absoluteString`. The rule
+  generalises: everything downstream trusts a gate's *output*, so a gate that passes
+  its input through unnormalised is not a gate.
+- **Gate 2 constrains the URL submitted, not the address finally fetched.**
+  `https://l.instagram.com/?u=https%3A%2F%2Fevil.example%2Fx` is a legitimate
+  dot-boundary match, and yt-dlp/gallery-dl follow redirects without re-consulting
+  anything. Gate 1 still requires an extension origin, so this is defence in depth
+  rather than a hole — but the earlier wording ("cannot point the downloader at an
+  arbitrary address") was false and is corrected here.
+
+What survived the same adversarial pass unchanged, and should not be "improved": the host
+dot-boundary match (`host == x || host.hasSuffix("." + x)`) blocked `instagram.com.evil.example`,
+`evilinstagram.com`, punycode homographs and userinfo spoofs (`https://instagram.com@evil.example/`,
+where `URL.host` correctly lands on `evil.example`); and anchoring the origin check with
+`hasPrefix` blocked `https://evil.example/chrome-extension://x`.
 
 Also: one grab at a time. A second `POST /grab` while one is running returns `409`, and
 the button renders "busy" rather than queueing.
