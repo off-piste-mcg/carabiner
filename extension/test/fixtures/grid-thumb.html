@@ -33,5 +33,23 @@
     <a href="/offpiste.mcg/followers/" class="stat-link">1,204 followers</a>
     <a href="/explore/tags/offpiste/" class="tag-link">#offpiste</a>
   </footer>
+  <!-- A "tagged photos" style section: the entry element (.deep-entry-image) sits four
+       ancestor levels below the post container, with two non-post anchors (a tagged-account
+       link and a hashtag link) appearing before the real permalink in document order — so a
+       walk that only checks the first anchor per level, rather than all of them, fails here. -->
+  <section class="tagged-photos">
+    <a href="/some.other.account/" class="decoy-tag-link">
+      <span class="decoy-label">tagged</span>
+    </a>
+    <a href="/explore/tags/mountains/" class="decoy-hashtag-link">#mountains</a>
+    <div class="deep-post-wrapper">
+      <div class="deep-post-inner">
+        <div class="deep-post-media">
+          <img src="https://scontent.cdninstagram.com/v/example-grid-deep.jpg" alt="Photo by offpiste.mcg" class="deep-entry-image">
+        </div>
+      </div>
+    </div>
+    <a href="/p/Q4rR6sS8tT0/" class="deep-permalink">View post</a>
+  </section>
 </main>
 </body></html>
