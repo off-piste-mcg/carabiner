@@ -1088,7 +1088,7 @@ test("does not mistake a profile link for a post link", () => {
 
 ```bash
 cd extension && npm init -y >/dev/null && npm pkg set type=module && npm i -D jsdom
-node --test test/
+node --test
 ```
 
 Expected: FAIL — cannot find `../src/shortcode.js`.
@@ -1135,7 +1135,7 @@ function findPostLink(node) {
 - [ ] **Step 5: Run to verify the tests pass**
 
 ```bash
-cd extension && node --test test/
+cd extension && node --test
 ```
 
 Expected: PASS, 6 tests.
