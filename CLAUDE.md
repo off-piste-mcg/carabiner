@@ -731,6 +731,44 @@ from the URL for "just this slide".
     Keep the gate's wording in mind if it ever fires again: "this is a Debug build" is the
     *likeliest* cause of a stray `get-task-allow`, not the only one.
 
+27. **"The application 'Carabiner' can't be opened" is a LaunchServices registration
+    problem, not a broken build — and the app will run fine when you exec the binary
+    directly, which is what makes it so confusing.** Hit 2026-08-12. `open
+    ~/Applications/Carabiner.app` returned **exit 0** and nothing launched; Finder showed
+    the generic "can't be opened" dialog. Everything you would normally suspect was fine:
+    `codesign --verify --deep --strict` said *valid on disk / satisfies its Designated
+    Requirement*, there were no quarantine xattrs, the architecture matched, and running
+    `Contents/MacOS/Carabiner` directly started the app and logged
+    `grab hotkey registered as ⌃⌥⌘V`. The decisive clue is that the **same bundle launched
+    fine from `/tmp` and failed from `~/Applications`** — a location-dependent failure, so
+    the bundle is not the variable.
+
+    Cause: repeated dev installs to `~/Applications` had left **18+ stale records** for
+    `com.offpiste.carabiner` in the LaunchServices database, and LS resolved that path to
+    a dead one. This is gotcha #11's poisoning mechanism, just arriving as a launch
+    failure instead of a notification failure. A Developer ID copy also sitting in
+    `/Applications` (a different Team ID from the Apple Development dev builds) is what
+    makes duplicate records accumulate in the first place.
+
+    Fix, and it is instant:
+    ```bash
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+      -f ~/Applications/Carabiner.app
+    open ~/Applications/Carabiner.app
+    ```
+    Inspect the damage with `… /lsregister -dump | grep -i carabiner | grep -iE 'path|bundle id'`.
+    The real prevention is gotcha #11's rule, which this is a second face of: **do not keep
+    two copies of this bundle id on disk.** A Developer ID build in `/Applications` and an
+    Apple Development build in `~/Applications` are two, and they fight.
+
+    Related trap noticed in the same investigation, not the cause but worth knowing:
+    reusing one `-derivedDataPath` for both `xcodebuild test` and `xcodebuild build`
+    leaves the test host's `Contents/PlugIns/CarabinerTests.xctest` and its
+    `XCTest`/`Testing` frameworks embedded in the app bundle, because the `build` action
+    does not remove what the `test` action added. That bundle does launch, so it will not
+    announce itself — but it is not the app you are shipping. Use a separate derived-data
+    path for a build you intend to install, or accept that you are testing a test host.
+
 ## Dependencies
 
 - `yt-dlp` — video (IG/YouTube/etc.)
