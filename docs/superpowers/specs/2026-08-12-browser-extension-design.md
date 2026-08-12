@@ -233,6 +233,16 @@ it.
    worse first run for half the team. Mitigation if confirmed: pass `browser=` from the
    click, and on a Safari cookie-read failure retry once against Chrome's cookies before
    surfacing an error. **Verify on a machine that has never granted it.**
+
+   **Requirement (stated by Wisse, 2026-08-12): whatever permissions this turns out to
+   need, they are granted from the Setup & Permissions window like every other one — an
+   Allow row with live status, never a written instruction to go hunting in System
+   Settings.** For Full Disk Access specifically, note the honest limit of what an app can
+   do: macOS has no API to grant it, and unlike Automation it cannot even be *prompted*
+   for. The row must therefore (a) detect the real state by attempting the cookie read,
+   (b) deep-link to `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`,
+   and (c) explain in one line why it is needed. Detection is what makes it honest: the
+   row goes green only when the read actually succeeds.
 3. **Instagram markup churn** will break button placement periodically. Accepted: the
    hotkey and the app keep working, so this is never a single point of failure. The
    fixture-based shortcode tests localise the damage.

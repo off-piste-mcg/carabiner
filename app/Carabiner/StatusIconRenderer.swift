@@ -4,17 +4,18 @@ import AppKit
 /// ring. Pure — a value in, an image out, no state and no timers.
 ///
 /// Geometry was settled by running a throwaway prototype on a real menu bar rather than
-/// derived, because a true circle does not fit around the mark at its resting size: the
-/// mark is 20.5 x 16pt, so a ring around it lands near 25pt diameter in a 22-24pt bar.
-/// Hence the shrink to 10pt for the duration of a grab. See the design doc.
+/// derived, because a true circle does not fit around the mark at its resting size: at
+/// 12 x 16pt the circumscribed circle is already 20pt, leaving no room for the ring's
+/// stroke in a 22-24pt bar. Hence the shrink to 10pt for the duration of a grab.
+/// See the design doc.
 struct StatusIconRenderer {
     static let side: CGFloat = 22
     static let markHeight: CGFloat = 10
     static let stroke: CGFloat = 1.5
     static let trackAlpha: CGFloat = 0.12
-    /// The asset is cropped to the mark's own bounds (496:388), so height sets the size
+    /// The asset is cropped to the mark's own bounds (306:409), so height sets the size
     /// and width follows.
-    static let markAspect: CGFloat = 496.0 / 388.0
+    static let markAspect: CGFloat = 306.0 / 409.0
 
     let mark: NSImage?
 
@@ -23,7 +24,7 @@ struct StatusIconRenderer {
     /// The resting icon — unchanged from what the menu bar has always shown.
     func idle() -> NSImage? {
         guard let copy = mark?.copy() as? NSImage else { return nil }
-        copy.size = NSSize(width: 20.5, height: 16)
+        copy.size = NSSize(width: 12, height: 16)
         copy.isTemplate = true
         return copy
     }
