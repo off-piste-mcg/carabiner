@@ -234,6 +234,28 @@ targets:
       - path: ../extension/dist/chrome/icons
         buildPhase: resources
         type: folder
+    # Closes the "edited extension/src/*.js, rebuilt, shipped the old JS" trap — the same
+    # shape as the Contents/Resources/carabiner snapshot trap already documented for the
+    # main app. This does NOT help a from-scratch checkout: `xcodegen generate` itself
+    # resolves the sources above at GENERATE time and fails outright if dist/chrome does
+    # not exist yet (confirmed by moving dist/ aside and generating — three "missing
+    # source directory" errors), so the very first build after cloning still needs
+    # extension/build.sh run once beforehand (release.sh now does this; see its comment).
+    # What this DOES fix is every build after that: once dist/chrome exists and the
+    # project has been generated once, xcodebuild copies whatever dist/chrome/{src,icons}
+    # currently contain at its own Copy Bundle Resources step — folder references are not
+    # enumerated into the pbxproj, so neither editing a file's content nor adding a new
+    # one under extension/src/ requires a fresh `xcodegen generate`. A pre-build script is
+    # the first build phase for this target, strictly before that copy step, so refreshing
+    # dist/chrome here means the copy always sees current content. Verified by editing
+    # extension/src/worker.js, rebuilding with no manual build.sh run and no regenerate,
+    # and diffing the built appex's copy against the edited source.
+    preBuildScripts:
+      - name: Refresh extension/dist/chrome from extension/src
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          "$SRCROOT/../extension/build.sh" >/dev/null
     # Like Carabiner/Info.plist (see app/.gitignore), this is a build product xcodegen
     # writes fresh from `properties` on every `generate` — a hand-authored file at this
     # path is silently overwritten with xcodegen's bare default template (no NSExtension
