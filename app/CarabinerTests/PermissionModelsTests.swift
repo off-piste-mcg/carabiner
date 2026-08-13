@@ -190,3 +190,69 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertFalse(PermissionRow.Tick.pending.isFailure)
     }
 }
+
+extension PermissionModelsTests {
+    func testBrowserButtonRowExists() {
+        XCTAssertTrue(PermissionRow.allCases.contains(.browserButton))
+    }
+    func testBrowserButtonIsGrantedOnlyWhenSeenRecently() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now), .notDetermined)
+        // A browser that has not checked in for a month is not proof of anything.
+        XCTAssertEqual(browserButtonStatus(lastSeen: now.addingTimeInterval(-60*60*24*30), now: now),
+                       .notDetermined)
+    }
+    func testBrowserButtonTurningOnStartsTheInstall() {
+        XCTAssertEqual(PermissionRow.browserButton.intent(desired: true, status: .notDetermined),
+                       .request)
+    }
+    func testBrowserButtonTitleAndWhy() {
+        XCTAssertEqual(PermissionRow.browserButton.title, "Instagram button")
+        XCTAssertFalse(PermissionRow.browserButton.why.isEmpty)
+    }
+    func testExistingRowsKeepTheGenericIntent() {
+        // The new row-aware wrapper must not change behaviour for the rows that already
+        // worked — it only exists so a row that cannot be prompted can say so.
+        for row in [PermissionRow.notifications, .browserAccess, .carouselDialog] {
+            for status: PermissionStatus in [.granted, .denied, .notDetermined, .targetNotRunning] {
+                XCTAssertEqual(row.intent(desired: true, status: status),
+                               toggleAction(desired: true, status: status),
+                               "\(row) changed behaviour at \(status)")
+            }
+        }
+    }
+}
+
+extension PermissionModelsTests {
+    func testFullDiskAccessRowExists() {
+        XCTAssertTrue(PermissionRow.allCases.contains(.fullDiskAccess))
+    }
+    func testFullDiskAccessAlwaysDeepLinks() {
+        // macOS has no API to grant FDA, and unlike Automation it cannot even be
+        // *prompted* for. Opening the right System Settings pane is the only honest
+        // action at every status — including .notDetermined, where every other row
+        // would prompt.
+        for status: PermissionStatus in [.notDetermined, .denied, .targetNotRunning] {
+            XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: status),
+                           .openSystemSettings)
+        }
+    }
+    func testFullDiskAccessCannotBePrompted() {
+        XCTAssertFalse(PermissionRow.fullDiskAccess.canBePrompted)
+        for row in [PermissionRow.notifications, .browserAccess, .carouselDialog, .browserButton] {
+            XCTAssertTrue(row.canBePrompted, "\(row) should still be promptable")
+        }
+    }
+    func testFullDiskAccessTitleAndWhy() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.title, "Full Disk Access")
+        XCTAssertFalse(PermissionRow.fullDiskAccess.why.isEmpty)
+    }
+    /// Turning fullDiskAccess "off" is meaningless (there's nothing we granted to revoke),
+    /// but the intent function must still resolve to something sane rather than crash —
+    /// `desired: false` always defers to the shared rule regardless of canBePrompted.
+    func testFullDiskAccessTurningOffDefersToTheSharedRule() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: false, status: .granted),
+                       toggleAction(desired: false, status: .granted))
+    }
+}

@@ -267,4 +267,130 @@ final class GrabRunnerTests: XCTestCase {
         """)
         XCTAssertEqual(GrabRunner(executable: stub).run(url: "https://x/y").message, "login required")
     }
+
+    // MARK: - isCookieReadFailure (pure)
+    //
+    // The measured, real yt-dlp error (2026-08-13, Safari cookies, Full Disk Access denied):
+    //   ERROR: [Errno 1] Operation not permitted:
+    //     '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'
+
+    func testRecognisesTheMeasuredSafariCookieError() {
+        let log = "ERROR: [Errno 1] Operation not permitted:\n" +
+                  "  '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'"
+        XCTAssertTrue(isCookieReadFailure(inRawLog: log))
+    }
+
+    /// A permission error on some OTHER file (the output directory, say) must not be
+    /// mistaken for a cookie problem — only the specific cookie file name counts.
+    func testUnrelatedPermissionErrorIsNotACookieFailure() {
+        let log = "ERROR: [Errno 1] Operation not permitted: '/Users/x/Downloads/out.mp4'"
+        XCTAssertFalse(isCookieReadFailure(inRawLog: log))
+    }
+
+    /// A failure that mentions cookies but isn't a permission error (expired login) must
+    /// not be mistaken for the FDA case — retrying with Chrome wouldn't fix a stale session.
+    func testExpiredCookiesWithoutPermissionErrorIsNotACookieReadFailure() {
+        XCTAssertFalse(isCookieReadFailure(inRawLog: "ERROR: login required — cookies expired?"))
+    }
+
+    // MARK: - shouldRetryWithChrome (pure)
+
+    func testRetriesOnlySafariAndOnlyACookieReadFailure() {
+        let cookieFailure = GrabResult(ok: false, message: "download failed.", cookieReadFailure: true)
+        XCTAssertTrue(shouldRetryWithChrome(browser: .safari, result: cookieFailure))
+    }
+
+    /// The post being deleted (or private, or any other real failure) must NOT be retried —
+    /// silently re-trying against a different browser's session would hide a genuine error
+    /// behind what looks like a random extra delay, or worse, mask it if Chrome happens to
+    /// also fail for an unrelated reason.
+    func testNonCookieFailureIsNotRetried() {
+        let deletedPost = GrabResult(ok: false, message: "download failed.", cookieReadFailure: false)
+        XCTAssertFalse(shouldRetryWithChrome(browser: .safari, result: deletedPost))
+    }
+
+    /// Chrome's cookie jar is plain-readable — there is nothing this retry could fix for
+    /// Chrome, so it must never fire there even if `cookieReadFailure` were somehow true.
+    func testChromeIsNeverRetried() {
+        let result = GrabResult(ok: false, message: "download failed.", cookieReadFailure: true)
+        XCTAssertFalse(shouldRetryWithChrome(browser: .chrome, result: result))
+    }
+
+    func testSuccessIsNeverRetried() {
+        let result = GrabResult(ok: true, message: "ABC_fixed.mp4", cookieReadFailure: true)
+        XCTAssertFalse(shouldRetryWithChrome(browser: .safari, result: result))
+    }
+
+    func testFullDiskAccessDeniedResultNamesTheRealGrant() {
+        let result = fullDiskAccessDeniedResult()
+        XCTAssertFalse(result.ok)
+        XCTAssertTrue(result.message.contains("Full Disk Access"))
+    }
+
+    // MARK: - the retry wired end-to-end through run(url:)
+    //
+    // These exercise the actual GrabRunner.run(url:) retry, not just the pure decision —
+    // the policy function alone can't catch a wiring bug (wrong browser copied into the
+    // retry, retry never actually invoked, etc).
+
+    /// The stub only succeeds when it sees `CARABINER_BROWSER=chrome`; it fails with the
+    /// exact measured cookie error otherwise. Starting the runner on `.safari` must still
+    /// end in success, because `run(url:)` retries with Chrome transparently.
+    private func writeCookieAwareStub() -> String {
+        writeStub("""
+        if [ "${CARABINER_BROWSER:-}" = "chrome" ]; then
+          echo '  ✓ ABC_fixed.mp4'
+          exit 0
+        fi
+        echo "ERROR: [Errno 1] Operation not permitted:" 1>&2
+        echo "  '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'" 1>&2
+        echo '✗ download failed.' 1>&2
+        exit 1
+        """)
+    }
+
+    func testSafariCookieFailureTransparentlyRetriesAndSucceedsWithChrome() {
+        let stub = writeCookieAwareStub()
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.message, "ABC_fixed.mp4")
+    }
+
+    /// Starting on Chrome must never retry — the stub only succeeds for `chrome`, so if this
+    /// somehow retried it would still pass; a marker file is how the test proves it did NOT.
+    func testChromeCookieFailureIsNotRetried() {
+        let stub = writeStub("""
+        echo '✗ private account' 1>&2
+        exit 1
+        """)
+        let result = GrabRunner(executable: stub, browser: .chrome).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "private account")
+    }
+
+    /// A Safari failure that is NOT a cookie-read problem (a deleted post, say) must reach
+    /// the user as-is — not retried, not reworded.
+    func testSafariNonCookieFailureIsSurfacedUnchanged() {
+        let stub = writeStub("""
+        echo '✗ this post is no longer available' 1>&2
+        exit 1
+        """)
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertEqual(result.message, "this post is no longer available")
+    }
+
+    /// If even the Chrome retry fails, the user must see "Full Disk Access" — never the raw
+    /// "Operation not permitted" on a path nobody recognises.
+    func testWhenChromeRetryAlsoFailsTheMessageNamesFullDiskAccess() {
+        let stub = writeStub("""
+        echo "ERROR: [Errno 1] Operation not permitted:" 1>&2
+        echo "  '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'" 1>&2
+        echo '✗ download failed.' 1>&2
+        exit 1
+        """)
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertFalse(result.ok)
+        XCTAssertTrue(result.message.contains("Full Disk Access"), "got: \(result.message)")
+    }
 }

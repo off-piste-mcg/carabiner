@@ -50,7 +50,12 @@ final class MenuBarController: NSObject {
     @objc func showOnboarding() {
         if onboarding == nil {
             onboarding = OnboardingWindowController(
-                checker: LivePermissionChecker(browser: Self.browser),
+                // `grabServer` is read fresh on every status check (see LivePermissionChecker's
+                // `lastSeen` doc comment) rather than captured once here — a closure, not the
+                // dictionary itself, is what keeps the browserButton row honest as new
+                // requests land after the window is already open.
+                checker: LivePermissionChecker(browser: Self.browser,
+                                               lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] }),
                 hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
                 clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
         }

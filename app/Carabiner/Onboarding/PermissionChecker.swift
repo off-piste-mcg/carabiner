@@ -16,8 +16,34 @@ protocol PermissionChecking {
 final class LivePermissionChecker: PermissionChecking {
     private let browser: Browser
     private static let systemEventsId = "com.apple.systemevents"
+    /// How the browserButton row learns whether an extension has genuinely reached the app.
+    /// Read fresh on every status check, never cached — a browser that stops checking in
+    /// (or never started) has to fall back to notDetermined on its own, not stay stuck on
+    /// whatever the last read happened to be. Defaults to an empty dictionary so nothing
+    /// that never touches `.browserButton` (every existing call site, every existing test)
+    /// has to know this parameter exists.
+    private let lastSeen: () -> [String: Date]
 
-    init(browser: Browser) { self.browser = browser }
+    init(browser: Browser, lastSeen: @escaping () -> [String: Date] = { [:] }) {
+        self.browser = browser
+        self.lastSeen = lastSeen
+    }
+
+    /// The exact read a Safari-cookie grab makes. Existence alone proves nothing (a denied
+    /// process can often still `stat` a protected file); only a real, successful `open()`
+    /// counts as granted — matching the project's "a green tick means a real check" rule.
+    private static let safariCookiesPath = NSHomeDirectory()
+        + "/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
+
+    private static func fullDiskAccessStatus() -> PermissionStatus {
+        let fd = open(safariCookiesPath, O_RDONLY)
+        if fd >= 0 { close(fd); return .granted }
+        // EPERM is TCC's answer for "not authorised" on a protected container — the same
+        // errno GrabRunner.isCookieReadFailure matches in yt-dlp/gallery-dl's own output.
+        // Anything else (overwhelmingly ENOENT: Safari has never run, or never saved
+        // cookies) proves nothing either way, so it must not read as a denial.
+        return errno == EPERM ? .denied : .notDetermined
+    }
 
     func status(for row: PermissionRow, completion: @escaping (PermissionStatus) -> Void) {
         switch row {
@@ -37,6 +63,12 @@ final class LivePermissionChecker: PermissionChecking {
                 guard running else { completion(.targetNotRunning); return }
                 self.automation(bundleId: Self.systemEventsId, ask: false, completion: completion)
             }
+        case .browserButton:
+            let s = browserButtonStatus(lastSeen: lastSeen()[browser.rawValue], now: Date())
+            DispatchQueue.main.async { completion(s) }
+        case .fullDiskAccess:
+            let s = Self.fullDiskAccessStatus()
+            DispatchQueue.main.async { completion(s) }
         }
     }
 
@@ -66,6 +98,20 @@ final class LivePermissionChecker: PermissionChecking {
                 guard running else { completion(.targetNotRunning); return }
                 self.automation(bundleId: bundleId, ask: true, completion: completion)
             }
+        case .browserButton:
+            // Unreachable in practice: OnboardingViewModel.setEnabled intercepts
+            // `.browserButton` before it ever calls `request` — installing/managing the
+            // extension is opening a web page or Safari's extension prefs, neither of
+            // which is a TCC permission this seam exists to wrap. Kept only so the switch
+            // stays exhaustive; report the real status rather than guessing if it ever
+            // does fire.
+            status(for: row, completion: completion)
+        case .fullDiskAccess:
+            // Unreachable via PermissionRow.intent (canBePrompted is false, so `desired:
+            // true` never produces `.request`). Fall back to the one real action —
+            // deep-link — so an exhaustive switch doesn't have to mean "does nothing".
+            openSystemSettings(for: row)
+            status(for: row, completion: completion)
         }
     }
 
@@ -76,6 +122,13 @@ final class LivePermissionChecker: PermissionChecking {
             url = "x-apple.systempreferences:com.apple.preference.notifications"
         case .browserAccess, .carouselDialog:
             url = "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
+        case .browserButton:
+            // Handled by OnboardingViewModel.installBrowserButton() before this is reached
+            // (see the `.request` comment above) — there is no System Settings pane for an
+            // extension the user can also just uninstall from the browser itself.
+            return
+        case .fullDiskAccess:
+            url = fullDiskAccessSettingsURL
         }
         if let u = URL(string: url) { NSWorkspace.shared.open(u) }
     }

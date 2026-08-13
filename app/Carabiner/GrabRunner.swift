@@ -9,6 +9,53 @@ struct GrabResult {
     /// `@handle` of the Instagram account the grab came from, when the engine reported
     /// one (`::progress:from:` marker). Decoration for the banner — nil is normal.
     var user: String? = nil
+    /// Whether this failure was specifically yt-dlp/gallery-dl being denied the READ of a
+    /// browser's cookie file (as opposed to, say, a deleted post or expired login). Default
+    /// `false` so every pre-existing `GrabResult(...)` call site — including every test that
+    /// predates this field — is unaffected. Only `run(url:)`'s general failure path ever sets
+    /// it `true`; see `isCookieReadFailure`. Exists so `shouldRetryWithChrome` can be a pure
+    /// function over structured data instead of re-parsing the message string, which is
+    /// already-lossy (only the LAST output line survives into `message`).
+    var cookieReadFailure: Bool = false
+}
+
+/// Pure: does this raw tool output (yt-dlp/gallery-dl's own log, not the trimmed one-line
+/// `GrabResult.message`) describe a denied READ of a cookie file? Deliberately narrow —
+/// matching both the errno text AND the specific cookie-file name — so it can't misfire on
+/// some unrelated "Operation not permitted" elsewhere in a long tool log (a permission error
+/// on the *output* file, say), and can't fire on a failure that has nothing to do with
+/// cookies at all (a deleted post, an expired login, a rate limit).
+///
+/// Matches on the substring, not a line-by-line scan: the real error yt-dlp emits wraps the
+/// path onto its own line —
+///   ERROR: [Errno 1] Operation not permitted:
+///     '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'
+/// — so anchoring to one line would miss it depending on exactly how the two pieces get
+/// split across yt-dlp's stdout/stderr interleaving.
+func isCookieReadFailure(inRawLog log: String) -> Bool {
+    log.contains("Operation not permitted") && log.contains("Cookies.binarycookies")
+}
+
+/// Pure: whether a failed grab should be retried once against Chrome's cookies instead of
+/// the browser it actually asked for. Scoped deliberately narrow:
+///  - only Safari, the one browser whose cookie jar macOS puts behind Full Disk Access —
+///    Chrome's is plain-readable, so there is nothing to retry there even if some other
+///    error happened to look like this one;
+///  - only a genuine cookie-file read failure (`GrabResult.cookieReadFailure`) — any other
+///    reason a Safari grab failed (private post, deleted post, expired login) must fail
+///    exactly as it always did, not silently retry against a different browser's session.
+/// Bounded to one retry by construction: the caller always retries with `.chrome`, and this
+/// function returns `false` whenever `browser` is already `.chrome`.
+func shouldRetryWithChrome(browser: Browser, result: GrabResult) -> Bool {
+    browser == .safari && !result.ok && result.cookieReadFailure
+}
+
+/// What the user sees when even the Chrome-cookie retry didn't fix it. "Operation not
+/// permitted" on a path nobody recognises is not a diagnosis — name the actual missing
+/// grant so it is discoverable from the banner (Setup & Permissions carries the matching
+/// Full Disk Access row).
+func fullDiskAccessDeniedResult() -> GrabResult {
+    GrabResult(ok: false, message: "Full Disk Access needed to read Safari's cookies — see Setup & Permissions")
 }
 
 struct GrabRunner {
@@ -43,7 +90,25 @@ struct GrabRunner {
         return res
     }
 
+    /// One grab attempt, plus (Safari only) the one-shot Chrome-cookie retry described on
+    /// `shouldRetryWithChrome`. The retry is invisible to callers: they still see one
+    /// `GrabResult` for what looks, from the outside, like a single grab — MenuBarController
+    /// and the extension server neither know nor need to know a second child process ran.
     func run(url: String) -> GrabResult {
+        let result = runOnce(url: url)
+        guard shouldRetryWithChrome(browser: browser, result: result) else { return result }
+        NSLog("Carabiner: Safari cookie read failed — retrying %@ with Chrome's cookies", url)
+        var retryRunner = self
+        retryRunner.browser = .chrome
+        let retryResult = retryRunner.runOnce(url: url)
+        if retryResult.ok { return retryResult }
+        // The Chrome retry's own failure reason (almost certainly unrelated — Chrome's
+        // cookies are readable) would be a non-sequitur next to a banner about Safari. Name
+        // the thing that is actually true and actually fixable instead.
+        return fullDiskAccessDeniedResult()
+    }
+
+    private func runOnce(url: String) -> GrabResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: executable)
         proc.arguments = [url]
@@ -110,8 +175,14 @@ struct GrabRunner {
 
         guard proc.terminationStatus == 0 else {
             let last = (outLines + errLines).last ?? ""
+            // isCookieReadFailure needs the RAW log, not `last` — the specific "Operation
+            // not permitted: ...Cookies.binarycookies" text is buried mid-log; `die()`'s
+            // one-line summary ("download failed.") is what survives into `last`/`message`.
+            let rawErr = String(data: errData, encoding: .utf8) ?? ""
             // Only a *leading* marker is decoration; a "✗ " mid-line is part of the message.
-            return GrabResult(ok: false, message: last.hasPrefix("✗ ") ? String(last.dropFirst(2)) : last)
+            return GrabResult(ok: false,
+                              message: last.hasPrefix("✗ ") ? String(last.dropFirst(2)) : last,
+                              cookieReadFailure: isCookieReadFailure(inRawLog: rawErr))
         }
 
         // The script announces every save on stdout as `  ✓ <what>` — a filename for

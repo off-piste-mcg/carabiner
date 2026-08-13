@@ -10,8 +10,15 @@ enum PermissionStatus: Equatable {
 
 /// The permission rows of the setup window. The hotkey test is NOT one of these — it has
 /// its own state machine (HotkeyTestModel); nothing about it is a TCC permission.
+///
+/// `fullDiskAccess` is unlike the other four: macOS provides no API to grant it and — unlike
+/// Automation — no way to even *prompt* for it. It exists purely so Safari users have a
+/// discoverable, live-status row to fix the thing that otherwise makes the button silently
+/// decorative for them (Safari's cookie jar lives in a TCC-protected container; see
+/// GrabRunner's shouldRetryWithChrome for the Chrome-cookie fallback this row is the
+/// permanent fix for).
 enum PermissionRow: CaseIterable {
-    case notifications, browserAccess, carouselDialog
+    case notifications, browserAccess, carouselDialog, browserButton, fullDiskAccess
 
     enum Tick { case pending, ok, cross }
     enum Action: Equatable { case request, openSystemSettings, none }
@@ -21,6 +28,8 @@ enum PermissionRow: CaseIterable {
         case .notifications:  return "Notifications"
         case .browserAccess:  return "Browser access"
         case .carouselDialog: return "Carousel dialog"
+        case .browserButton:  return "Instagram button"
+        case .fullDiskAccess: return "Full Disk Access"
         }
     }
 
@@ -29,6 +38,8 @@ enum PermissionRow: CaseIterable {
         case .notifications:  return "So you see when a grab finishes — or why it didn't."
         case .browserAccess:  return "To read the address of the post you're looking at."
         case .carouselDialog: return "So Carabiner can ask 'this slide or the whole set?'."
+        case .browserButton:  return "So you can save a post straight from your feed."
+        case .fullDiskAccess: return "Safari keeps its cookies in a protected folder — Carabiner needs this to read them."
         }
     }
 
@@ -45,8 +56,8 @@ enum PermissionRow: CaseIterable {
     /// row now rather than a comment in one branch.
     var requiresRunningTarget: Bool {
         switch self {
-        case .notifications:                return false
-        case .browserAccess, .carouselDialog: return true
+        case .notifications, .browserButton, .fullDiskAccess: return false
+        case .browserAccess, .carouselDialog:                 return true
         }
     }
 
@@ -68,9 +79,9 @@ enum PermissionRow: CaseIterable {
     /// carousel row that "Chrome will open first" was simply false.
     var targetLaunchNote: String? {
         switch self {
-        case .notifications:  return nil
-        case .browserAccess:  return "Chrome will open first"
-        case .carouselDialog: return "System Events will start first"
+        case .notifications, .browserButton, .fullDiskAccess: return nil
+        case .browserAccess:                                  return "Chrome will open first"
+        case .carouselDialog:                                 return "System Events will start first"
         }
     }
 
@@ -120,6 +131,20 @@ func notificationStatus(authorization: UNAuthorizationStatus,
     }
 }
 
+/// Green means a browser's extension has genuinely reached the app — never a guess about
+/// whether something is "probably installed". A stale check-in is not proof: two weeks
+/// covers a normal gap between grabs without letting a browser that was uninstalled months
+/// ago keep reading as connected forever.
+func browserButtonStatus(lastSeen: Date?, now: Date,
+                         freshness: TimeInterval = 60 * 60 * 24 * 14) -> PermissionStatus {
+    guard let lastSeen, now.timeIntervalSince(lastSeen) < freshness else { return .notDetermined }
+    return .granted
+}
+
+/// Full Disk Access has no System Settings identifier of its own on the automation scheme —
+/// this is the pane's real anchor, verified against System Settings' own deep-link scheme.
+let fullDiskAccessSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+
 /// What flipping a row's switch should actually do.
 ///
 /// macOS gives an app no way to revoke its own grants, and no way to grant one that was
@@ -147,6 +172,25 @@ func toggleAction(desired: Bool, status: PermissionStatus) -> ToggleIntent {
     } else {
         // Turning OFF is never something we can do ourselves, whatever the current state.
         return status == .granted ? .openSystemSettings : .nothing
+    }
+}
+
+extension PermissionRow {
+    /// Most rows can trigger their own OS prompt, so they defer to the shared rule.
+    /// A row that macOS provides no way to prompt for can only deep-link — and that has to
+    /// win even at `.notDetermined`, where every other row would ask `toggleAction` to
+    /// `.request`. There is nothing to request: `fullDiskAccess` has no `requestAuthorization`
+    /// equivalent, ever.
+    func intent(desired: Bool, status: PermissionStatus) -> ToggleIntent {
+        guard desired else { return toggleAction(desired: desired, status: status) }
+        return canBePrompted ? toggleAction(desired: desired, status: status) : .openSystemSettings
+    }
+
+    var canBePrompted: Bool {
+        switch self {
+        case .notifications, .browserAccess, .carouselDialog, .browserButton: return true
+        case .fullDiskAccess:                                                 return false
+        }
     }
 }
 
