@@ -41,12 +41,13 @@ final class Notifier {
             case .removeWorking:
                 center.removeDeliveredNotifications(withIdentifiers: [Self.workingId])
 
-            case .postOutcome(let ok, let message, let user):
+            case .postOutcome(let ok, let message, let user, let usedFallbackBrowser):
                 let content = UNMutableNotificationContent()
                 content.title = "Carabiner"
                 // Subtitle carries the verdict, body the detail the script actually
                 // reported (a filename, a directory, a reason) — never each other's text.
-                content.subtitle = Self.outcomeSubtitle(ok: ok, user: user)
+                content.subtitle = Self.outcomeSubtitle(ok: ok, user: user,
+                                                        usedFallbackBrowser: usedFallbackBrowser)
                 content.body = message
                 // A FRESH identifier every time, and this is load-bearing: posting with an
                 // already-delivered identifier *replaces* that notification in Notification
@@ -79,9 +80,18 @@ final class Notifier {
     /// it is testable — UNUserNotificationCenter itself only works in a signed,
     /// LaunchServices-launched bundle. A failure never names the account: "Grab failed
     /// from @x" reads as blame, and the message line already says what went wrong.
-    static func outcomeSubtitle(ok: Bool, user: String?) -> String {
+    ///
+    /// `usedFallbackBrowser` (Finding 4, review fix round 1): staying silent about a
+    /// Safari grab actually having used Chrome's session is an honesty problem, not a
+    /// cosmetic one — it can mean a different Instagram account, so what landed in
+    /// Downloads might not be what the user was looking at. Hardcoded to "Chrome" rather
+    /// than a per-browser name: `GrabRunner.shouldRetryWithChrome` only ever retries with
+    /// `.chrome` today, so there is exactly one fallback browser this can ever name: if
+    /// that ever changes, this needs a real name-mapping, not a guess.
+    static func outcomeSubtitle(ok: Bool, user: String?, usedFallbackBrowser: Browser? = nil) -> String {
         guard ok else { return "✗ Grab failed" }
-        if let user { return "✓ Saved from \(user)" }
-        return "✓ Saved"
+        var subtitle = user.map { "✓ Saved from \($0)" } ?? "✓ Saved"
+        if usedFallbackBrowser != nil { subtitle += " — used Chrome's login" }
+        return subtitle
     }
 }

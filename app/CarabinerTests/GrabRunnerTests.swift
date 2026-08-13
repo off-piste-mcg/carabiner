@@ -393,4 +393,34 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertFalse(result.ok)
         XCTAssertTrue(result.message.contains("Full Disk Access"), "got: \(result.message)")
     }
+
+    // MARK: - usedFallbackBrowser (Finding 4, review fix round 1)
+    //
+    // A silent fallback is an honesty problem: the caller needs to know a DIFFERENT
+    // browser's session actually produced the result, because it can mean a different
+    // Instagram account.
+
+    func testSuccessfulRetryFlagsTheFallbackBrowser() {
+        let stub = writeCookieAwareStub()
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(result.usedFallbackBrowser, .chrome)
+    }
+
+    /// The common case — no retry ever happened — must not claim one did.
+    func testOrdinarySuccessDoesNotFlagAFallbackBrowser() {
+        let stub = writeStub("echo '  ✓ ABC_fixed.mp4'; exit 0")
+        let result = GrabRunner(executable: stub, browser: .chrome).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertNil(result.usedFallbackBrowser)
+    }
+
+    /// A Safari grab that succeeds on its OWN cookies (no retry needed) must not be
+    /// mislabelled as having used a fallback.
+    func testSafariSuccessWithoutRetryDoesNotFlagAFallbackBrowser() {
+        let stub = writeStub("echo '  ✓ ABC_fixed.mp4'; exit 0")
+        let result = GrabRunner(executable: stub, browser: .safari).run(url: "https://x/y")
+        XCTAssertTrue(result.ok)
+        XCTAssertNil(result.usedFallbackBrowser)
+    }
 }

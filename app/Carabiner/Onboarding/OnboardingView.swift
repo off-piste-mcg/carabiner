@@ -9,11 +9,22 @@ struct OnboardingView: View {
         Form {
             Section {
                 ForEach(PermissionRow.allCases, id: \.self) { row in
-                    PermissionToggleRow(title: row.title,
-                                        why: row.why,
-                                        detail: model.presentation(for: row).detail,
-                                        isOn: model.isOn(row)) { desired in
-                        model.setEnabled(desired, for: row)
+                    if model.isNotApplicable(row) {
+                        // No switch to flip — genuinely nothing to grant on this machine
+                        // (review fix round 1, Finding 3: today only `.fullDiskAccess` on a
+                        // machine that has never used Safari). A Toggle here would read as
+                        // "you haven't allowed this yet" and nudge a Chrome-only user toward
+                        // granting the broadest permission on macOS for a feature they will
+                        // never use.
+                        NotApplicableRow(title: row.title,
+                                         detail: model.presentation(for: row).detail ?? row.why)
+                    } else {
+                        PermissionToggleRow(title: row.title,
+                                            why: row.why,
+                                            detail: model.presentation(for: row).detail,
+                                            isOn: model.isOn(row)) { desired in
+                            model.setEnabled(desired, for: row)
+                        }
                     }
                 }
                 SetupRow(tick: model.hotkey.tick,
@@ -90,6 +101,27 @@ private struct PermissionToggleRow: View {
                 .labelsHidden()
                 .toggleStyle(.switch)
                 .accessibilityLabel(title)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// A row with nothing to grant on this machine — shown only for `.fullDiskAccess` when
+/// Safari's cookie file has never been created (review fix round 1, Finding 3). No switch,
+/// no button: just the title and a one-line reason, matching the left-hand column of
+/// `PermissionToggleRow` so the row doesn't visually jump when it later converges to a real
+/// switch (Safari gets installed and used, the file appears, `isNotApplicable` goes false).
+private struct NotApplicableRow: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.body)
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
         }
         .padding(.vertical, 2)
     }

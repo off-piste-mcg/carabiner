@@ -58,6 +58,13 @@ final class OnboardingViewModel: ObservableObject {
 
     func isOn(_ row: PermissionRow) -> Bool { statuses[row] == .granted }
 
+    /// True only for `.fullDiskAccess` on a machine that has never used Safari — see
+    /// `PermissionStatus.notApplicable`. The view uses this to render a plain explanatory
+    /// row instead of a switch: there is genuinely nothing to flip (review fix round 1,
+    /// Finding 3). Re-evaluated on every refresh, so if Safari's cookie file later appears
+    /// the row converges to a real switch on its own, the same as every other row.
+    func isNotApplicable(_ row: PermissionRow) -> Bool { statuses[row] == .notApplicable }
+
     /// The switch reports an intent, not a new state. Where the OS lets us act we act;
     /// otherwise we open System Settings and re-read — so the switch lands wherever the
     /// truth is, which may be exactly where it started. `row.intent`, not the bare
@@ -80,7 +87,14 @@ final class OnboardingViewModel: ObservableObject {
                 }
             case .openSystemSettings:
                 if row == .browserButton {
-                    self.installBrowserButton()
+                    // This branch is ALSO how a GRANTED browserButton row's switch arrives
+                    // here when turned OFF — `toggleAction(desired: false, status: .granted)`
+                    // resolves to `.openSystemSettings` for every row, since macOS gives no
+                    // row a way to revoke its own grant. There is no OS revoke for an
+                    // installed extension either, but re-running the install flow on "off"
+                    // was the wrong action performed for the right reason (review fix round
+                    // 1, minor finding): off must be a genuine no-op, not a second Allow.
+                    if desired { self.installBrowserButton() }
                 } else {
                     self.checker.openSystemSettings(for: row)
                 }

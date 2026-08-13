@@ -98,4 +98,29 @@ final class GrabServerTests: XCTestCase {
         XCTAssertEqual(action, .backstop, "prompt must arm a real, finite backstop — never leave the connection unbounded")
         XCTAssertLessThan(GrabServer.pausedDeadline(), .infinity, "the backstop armed above must itself be finite")
     }
+
+    // MARK: - lastSeen persistence (review fix round 1, Finding 2)
+    //
+    // GrabServer's own load/persist helpers are private, and instantiating GrabServer needs
+    // a live MenuBarController + socket — neither is reachable from here (see the file's
+    // top comment). This pins the one assumption the fix actually depends on: a
+    // `[String: Date]` dictionary survives a genuine UserDefaults round trip, which is the
+    // entire mechanism `loadLastSeen`/`recordLastSeen` are built on.
+
+    func testStringDateDictionaryRoundTripsThroughUserDefaults() {
+        let key = "carabinerTests.lastSeenRoundTrip"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        let now = Date()
+        let original: [String: Date] = ["chrome": now, "safari": now.addingTimeInterval(-120)]
+        UserDefaults.standard.set(original, forKey: key)
+        let loaded = UserDefaults.standard.dictionary(forKey: key) as? [String: Date]
+        XCTAssertEqual(loaded, original)
+    }
+
+    /// A key that was never written must come back empty, not crash or produce garbage —
+    /// this is the exact shape `loadLastSeen`'s `?? [:]` fallback covers on first launch.
+    func testMissingKeyRoundTripsToNil() {
+        let key = "carabinerTests.lastSeenNeverWritten"
+        XCTAssertNil(UserDefaults.standard.dictionary(forKey: key))
+    }
 }

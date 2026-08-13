@@ -17,6 +17,13 @@ struct GrabResult {
     /// function over structured data instead of re-parsing the message string, which is
     /// already-lossy (only the LAST output line survives into `message`).
     var cookieReadFailure: Bool = false
+    /// Set only when `run(url:)`'s Chrome-cookie retry is what actually produced this
+    /// SUCCESSFUL result. Review fix round 1, Finding 4: a silent fallback is an honesty
+    /// problem — the grab used a DIFFERENT browser's login than the one asked for, which
+    /// can mean a different Instagram account, so what landed in Downloads might not be
+    /// what the user was looking at. `nil` (the default) means no fallback happened, which
+    /// covers every pre-existing call site and test unchanged.
+    var usedFallbackBrowser: Browser? = nil
 }
 
 /// Pure: does this raw tool output (yt-dlp/gallery-dl's own log, not the trimmed one-line
@@ -91,21 +98,29 @@ struct GrabRunner {
     }
 
     /// One grab attempt, plus (Safari only) the one-shot Chrome-cookie retry described on
-    /// `shouldRetryWithChrome`. The retry is invisible to callers: they still see one
-    /// `GrabResult` for what looks, from the outside, like a single grab — MenuBarController
-    /// and the extension server neither know nor need to know a second child process ran.
+    /// `shouldRetryWithChrome`. Callers still see exactly one `GrabResult`, and the fact
+    /// that a SECOND child process ran is entirely internal — but which browser's session
+    /// actually produced a successful result is not: `GrabResult.usedFallbackBrowser`
+    /// carries that through (Finding 4, fix round 1), because it can mean a different
+    /// Instagram account entirely, and a caller that stayed silent about it would be lying
+    /// by omission about what actually got saved.
     func run(url: String) -> GrabResult {
         let result = runOnce(url: url)
         guard shouldRetryWithChrome(browser: browser, result: result) else { return result }
         NSLog("Carabiner: Safari cookie read failed — retrying %@ with Chrome's cookies", url)
         var retryRunner = self
         retryRunner.browser = .chrome
-        let retryResult = retryRunner.runOnce(url: url)
-        if retryResult.ok { return retryResult }
-        // The Chrome retry's own failure reason (almost certainly unrelated — Chrome's
-        // cookies are readable) would be a non-sequitur next to a banner about Safari. Name
-        // the thing that is actually true and actually fixable instead.
-        return fullDiskAccessDeniedResult()
+        var retryResult = retryRunner.runOnce(url: url)
+        guard retryResult.ok else {
+            // The Chrome retry's own failure reason (almost certainly unrelated — Chrome's
+            // cookies are readable) would be a non-sequitur next to a banner about Safari.
+            // Name the thing that is actually true and actually fixable instead.
+            return fullDiskAccessDeniedResult()
+        }
+        // Finding 4: a silent fallback is an honesty problem — flag it so the caller can
+        // tell the user their Safari grab actually used Chrome's session.
+        retryResult.usedFallbackBrowser = .chrome
+        return retryResult
     }
 
     private func runOnce(url: String) -> GrabResult {

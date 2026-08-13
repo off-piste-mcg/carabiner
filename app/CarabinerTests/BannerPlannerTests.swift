@@ -79,14 +79,14 @@ final class BannerPlannerTests: XCTestCase {
         _ = planner.grabStarted()
         _ = planner.handle(.download(percent: 100))
         XCTAssertEqual(planner.finished(GrabResult(ok: true, message: "ABC_fixed.mp4")),
-                       [.postOutcome(ok: true, message: "ABC_fixed.mp4", user: nil)])
+                       [.postOutcome(ok: true, message: "ABC_fixed.mp4", user: nil, usedFallbackBrowser: nil)])
     }
 
     func testFailurePostsAFreshOutcome() {
         var planner = BannerPlanner()
         _ = planner.grabStarted()
         XCTAssertEqual(planner.finished(GrabResult(ok: false, message: "cookies expired")),
-                       [.postOutcome(ok: false, message: "cookies expired", user: nil)])
+                       [.postOutcome(ok: false, message: "cookies expired", user: nil, usedFallbackBrowser: nil)])
     }
 
     /// The handle rides the outcome — the planner passes it through untouched so the
@@ -95,7 +95,18 @@ final class BannerPlannerTests: XCTestCase {
         var planner = BannerPlanner()
         _ = planner.grabStarted()
         XCTAssertEqual(planner.finished(GrabResult(ok: true, message: "9 files", user: "@offpiste.mcg")),
-                       [.postOutcome(ok: true, message: "9 files", user: "@offpiste.mcg")])
+                       [.postOutcome(ok: true, message: "9 files", user: "@offpiste.mcg", usedFallbackBrowser: nil)])
+    }
+
+    /// Finding 4, review fix round 1: `usedFallbackBrowser` must ride the outcome through
+    /// exactly like `user` does — the planner isn't the place that decides what to say
+    /// about it (that's `Notifier.outcomeSubtitle`), only the place that must not drop it.
+    func testSuccessCarriesTheFallbackBrowserThrough() {
+        var planner = BannerPlanner()
+        _ = planner.grabStarted()
+        let result = GrabResult(ok: true, message: "ABC_fixed.mp4", usedFallbackBrowser: .chrome)
+        XCTAssertEqual(planner.finished(result),
+                       [.postOutcome(ok: true, message: "ABC_fixed.mp4", user: nil, usedFallbackBrowser: .chrome)])
     }
 
     // MARK: - subtitle policy (pure, so it is testable outside a signed bundle)
@@ -112,6 +123,34 @@ final class BannerPlannerTests: XCTestCase {
     /// A failure never names the account, even when the engine reported one before dying.
     func testFailureSubtitleIgnoresTheHandle() {
         XCTAssertEqual(Notifier.outcomeSubtitle(ok: false, user: "@offpiste.mcg"), "✗ Grab failed")
+    }
+
+    // MARK: - fallback-browser wording (Finding 4, review fix round 1)
+
+    func testSubtitleNamesTheFallbackBrowserOnSuccess() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: true, user: nil, usedFallbackBrowser: .chrome),
+                       "✓ Saved — used Chrome's login")
+    }
+
+    /// The account and the fallback note are not mutually exclusive — knowing WHICH
+    /// account it actually came from is exactly the information Finding 4 says a silent
+    /// fallback was hiding.
+    func testSubtitleCombinesTheAccountAndTheFallbackNote() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: true, user: "@offpiste.mcg", usedFallbackBrowser: .chrome),
+                       "✓ Saved from @offpiste.mcg — used Chrome's login")
+    }
+
+    /// A failed grab must not claim a fallback browser saved anything — there is nothing
+    /// to name a login for.
+    func testFailureSubtitleIgnoresTheFallbackBrowser() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: false, user: nil, usedFallbackBrowser: .chrome),
+                       "✗ Grab failed")
+    }
+
+    /// No fallback happened — the default omits the wording entirely rather than saying
+    /// "used Chrome's login" for every ordinary Chrome grab.
+    func testSubtitleOmitsTheFallbackNoteWhenNoFallbackHappened() {
+        XCTAssertEqual(Notifier.outcomeSubtitle(ok: true, user: nil), "✓ Saved")
     }
 
     /// Cancelling the carousel dialog is a deliberate act, not a failure. The only right

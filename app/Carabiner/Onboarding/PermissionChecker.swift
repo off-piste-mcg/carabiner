@@ -4,6 +4,19 @@ import UserNotifications
 /// The seam between the setup window and the OS. Everything behind it is a thin
 /// wrapper over TCC/UNUserNotificationCenter — deliberately untested (the OS owns the
 /// behaviour); everything in front of it is pure and tested.
+///
+/// Threading contract (review fix round 1, "ALSO FIX" — this was previously undocumented):
+/// `status`/`request` may be CALLED from any thread, but the completion is guaranteed to
+/// land on the main queue. That is the only guarantee — it says nothing about what happens
+/// on the calling thread before a given implementation hops to main. `LivePermissionChecker`
+/// relies on this for `.browserButton`: it reads `lastSeen()` synchronously, on whichever
+/// thread `status(for:)` was called on, before dispatching the completion to main. That is
+/// correct only because every caller today (`OnboardingViewModel`, `@MainActor`) happens to
+/// call in from main already, which is what makes `GrabServer.lastSeen`'s own main-queue
+/// confinement safe to read there. A future caller off the main queue would break that
+/// silently — if `status`/`request` ever need to be called from a background queue, this
+/// protocol needs an explicit "callable from any thread, including reads before the main
+/// hop" contract enforced by every conforming type, not just relied upon by convention.
 protocol PermissionChecking {
     /// Passive: never shows a prompt. Completion on the main queue.
     func status(for row: PermissionRow, completion: @escaping (PermissionStatus) -> Void)
@@ -35,14 +48,13 @@ final class LivePermissionChecker: PermissionChecking {
     private static let safariCookiesPath = NSHomeDirectory()
         + "/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies"
 
-    private static func fullDiskAccessStatus() -> PermissionStatus {
+    /// The untested OS-facing wrapper: makes the real syscall, hands the outcome to the
+    /// pure `fullDiskAccessStatus(fd:errno:)` (PermissionModels.swift) where the
+    /// EPERM/ENOENT/success split actually lives and is tested.
+    private static func detectFullDiskAccessStatus() -> PermissionStatus {
         let fd = open(safariCookiesPath, O_RDONLY)
-        if fd >= 0 { close(fd); return .granted }
-        // EPERM is TCC's answer for "not authorised" on a protected container — the same
-        // errno GrabRunner.isCookieReadFailure matches in yt-dlp/gallery-dl's own output.
-        // Anything else (overwhelmingly ENOENT: Safari has never run, or never saved
-        // cookies) proves nothing either way, so it must not read as a denial.
-        return errno == EPERM ? .denied : .notDetermined
+        if fd >= 0 { close(fd) }
+        return fullDiskAccessStatus(fd: fd, errno: errno)
     }
 
     func status(for row: PermissionRow, completion: @escaping (PermissionStatus) -> Void) {
@@ -64,11 +76,19 @@ final class LivePermissionChecker: PermissionChecking {
                 self.automation(bundleId: Self.systemEventsId, ask: false, completion: completion)
             }
         case .browserButton:
-            let s = browserButtonStatus(lastSeen: lastSeen()[browser.rawValue], now: Date())
+            // ANY known browser counts (Finding 1) — reading only the single browser
+            // MenuBarController happens to have configured for cookies would silently
+            // orphan every other browser's check-ins, Safari's included.
+            let s = browserButtonStatus(lastSeen: mostRecentBrowserCheckIn(lastSeen()), now: Date())
             DispatchQueue.main.async { completion(s) }
         case .fullDiskAccess:
-            let s = Self.fullDiskAccessStatus()
-            DispatchQueue.main.async { completion(s) }
+            // Off-main, matching `automation(bundleId:ask:)` — `open()` on a TCC-protected
+            // path is a tccd round-trip, the same class of "not free" work that rule
+            // exists for (review fix round 1, "ALSO FIX").
+            DispatchQueue.global(qos: .userInitiated).async {
+                let s = Self.detectFullDiskAccessStatus()
+                DispatchQueue.main.async { completion(s) }
+            }
         }
     }
 

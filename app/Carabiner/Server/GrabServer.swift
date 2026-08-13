@@ -114,7 +114,29 @@ final class GrabServer {
     private(set) var state: State = .stopped
     /// Which browsers have proven they can reach us, and when. This is what turns an
     /// onboarding row green — a real connection, never a guess.
-    private(set) var lastSeen: [String: Date] = [:]
+    ///
+    /// Persisted to UserDefaults (review fix round 1, Finding 2): `GrabServer` itself is
+    /// recreated fresh on every app launch, so an in-memory-only dictionary made the
+    /// onboarding row's advertised "seen within 14 days" window fiction — it actually meant
+    /// "seen since Carabiner was last relaunched", which drops to grey on every ordinary
+    /// quit/update/crash no matter how recently a real request landed. Loaded once at
+    /// init, written back after every update via `recordLastSeen`. UserDefaults matches the
+    /// app's one existing use of it (`OnboardingWindowController.shownDefaultsKey`).
+    private(set) var lastSeen: [String: Date] = GrabServer.loadLastSeen()
+
+    private static let lastSeenDefaultsKey = "grabServerLastSeen"
+
+    private static func loadLastSeen() -> [String: Date] {
+        (UserDefaults.standard.dictionary(forKey: lastSeenDefaultsKey) as? [String: Date]) ?? [:]
+    }
+
+    /// The one place `lastSeen` is written — keeps the in-memory dictionary and its
+    /// on-disk copy from drifting apart. MUST be called on main (see the confinement note
+    /// above); both call sites already are.
+    private func recordLastSeen(_ browser: String, at date: Date) {
+        lastSeen[browser] = date
+        UserDefaults.standard.set(lastSeen, forKey: Self.lastSeenDefaultsKey)
+    }
 
     init(port: UInt16 = 51847, controller: MenuBarController) {
         self.port = port
@@ -266,7 +288,7 @@ final class GrabServer {
             // one move: an unrecognised name already falls back to `.chrome` for
             // cookie purposes two lines up, so recording presence under that same
             // fallback is consistent, not a new behaviour.
-            DispatchQueue.main.async { [weak self] in self?.lastSeen[browser.rawValue] = Date() }
+            DispatchQueue.main.async { [weak self] in self?.recordLastSeen(browser.rawValue, at: Date()) }
             // Resolved once, here — a plain value, not a closure re-run per echo site —
             // and reused for every `Access-Control-Allow-Origin` below (500, 409, and
             // `stream`'s headers). Finding 3, fix round 1: those three sites used to
@@ -362,7 +384,7 @@ final class GrabServer {
             return respond(c, status: 403, body: "forbidden")
         }
         if let browser = request.query["browser"], !browser.isEmpty {
-            DispatchQueue.main.async { [weak self] in self?.lastSeen[browser] = Date() }
+            DispatchQueue.main.async { [weak self] in self?.recordLastSeen(browser, at: Date()) }
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         // `checkOrigin(request.origin)`, not `request.origin` (fix round 2, Finding 2 —

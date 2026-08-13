@@ -1,11 +1,18 @@
 import Foundation
 import UserNotifications
 
-/// The four states a permission row can be in. `targetNotRunning` exists because the
+/// The states a permission row can be in. `targetNotRunning` exists because the
 /// Automation prompt (and even the passive check) needs the target app alive — a closed
 /// Chrome is indistinguishable from "never asked", so it presents as pending, not broken.
+///
+/// `notApplicable` is narrower: today it exists only for `.fullDiskAccess`, for the user
+/// who has never run Safari at all — Safari's cookie file (the thing that read is
+/// actually checking) does not exist yet, which proves nothing about the grant either way
+/// and is a fundamentally different situation from "denied" or "haven't asked yet". A
+/// Chrome-only user should not be told they are missing something they will never need
+/// (review fix round 1, Finding 3).
 enum PermissionStatus: Equatable {
-    case notDetermined, granted, denied, targetNotRunning
+    case notDetermined, granted, denied, targetNotRunning, notApplicable
 }
 
 /// The permission rows of the setup window. The hotkey test is NOT one of these — it has
@@ -97,6 +104,12 @@ enum PermissionRow: CaseIterable {
         case .targetNotRunning:
             return RowPresentation(tick: .pending, buttonTitle: "Allow", action: .request,
                                    detail: targetLaunchNote)
+        case .notApplicable:
+            // No button and no switch to flip — there is genuinely nothing to grant here
+            // (review fix round 1, Finding 3). `.ok`-shaped rather than `.pending`: this is
+            // a settled, fine state, not something still waiting on the user.
+            return RowPresentation(tick: .ok, buttonTitle: nil, action: .none,
+                                   detail: "Only needed if you use Safari")
         }
     }
 }
@@ -141,9 +154,40 @@ func browserButtonStatus(lastSeen: Date?, now: Date,
     return .granted
 }
 
+/// Pure: which check-in (if any) counts as evidence the button is installed, out of every
+/// browser that has ever pinged this app. Review fix round 1, Finding 1: the row used to
+/// read `lastSeen[browser.rawValue]` for the single browser `MenuBarController` happens to
+/// have configured for cookie-reading (hardcoded `.chrome`) — which has nothing to do with
+/// which browser's *extension* the user actually installed, and silently orphaned every
+/// Safari user's check-ins forever (this task's entire reason for existing). Any known
+/// browser must count, so this takes the freshest timestamp across all of them.
+func mostRecentBrowserCheckIn(_ lastSeen: [String: Date]) -> Date? {
+    lastSeen.values.max()
+}
+
 /// Full Disk Access has no System Settings identifier of its own on the automation scheme —
 /// this is the pane's real anchor, verified against System Settings' own deep-link scheme.
 let fullDiskAccessSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+
+/// Pure: classifies the outcome of the real `open()` syscall against Safari's cookie file.
+/// Factored out of `LivePermissionChecker.fullDiskAccessStatus()` (review fix round 1,
+/// "ALSO FIX" — the riskiest new green tick in this task had zero coverage) so the
+/// EPERM/ENOENT/success split is testable without a live denied machine. `fd`/`errno` are
+/// exactly what a real `open()` call would leave behind; the caller is the untested
+/// OS-facing wrapper that supplies them.
+func fullDiskAccessStatus(fd: Int32, errno errnoValue: Int32) -> PermissionStatus {
+    if fd >= 0 { return .granted }
+    // EPERM is TCC's answer for "not authorised" on a protected container — the same errno
+    // GrabRunner.isCookieReadFailure matches in yt-dlp/gallery-dl's own output.
+    if errnoValue == EPERM { return .denied }
+    // ENOENT — overwhelmingly "Safari has never run, or never saved cookies" — proves
+    // nothing about the grant. Reporting it as denied would invite a Chrome-only user to
+    // grant the broadest permission on macOS for a feature they will never use; reporting
+    // it as granted would be a green tick with nothing behind it. Neither is honest.
+    if errnoValue == ENOENT { return .notApplicable }
+    // Anything else is a genuinely unexpected failure — no story to tell yet.
+    return .notDetermined
+}
 
 /// What flipping a row's switch should actually do.
 ///
@@ -168,6 +212,9 @@ func toggleAction(desired: Bool, status: PermissionStatus) -> ToggleIntent {
         case .granted:                        return .nothing
         case .notDetermined, .targetNotRunning: return .request
         case .denied:                         return .openSystemSettings
+        // Nothing to request — there is no permission missing to ask for; see
+        // PermissionStatus.notApplicable.
+        case .notApplicable:                  return .nothing
         }
     } else {
         // Turning OFF is never something we can do ourselves, whatever the current state.
@@ -181,9 +228,18 @@ extension PermissionRow {
     /// win even at `.notDetermined`, where every other row would ask `toggleAction` to
     /// `.request`. There is nothing to request: `fullDiskAccess` has no `requestAuthorization`
     /// equivalent, ever.
+    ///
+    /// `.notApplicable` is the one status where even a non-promptable row has nothing to
+    /// deep-link *for* — sending a Chrome-only user to the Privacy pane for a grant they
+    /// will never use is the same false urgency `notApplicable` exists to remove (review
+    /// fix round 1, Finding 3). `toggleAction` already resolves `.notApplicable` to
+    /// `.nothing`, so this only needs to stop the blanket override from clobbering it.
     func intent(desired: Bool, status: PermissionStatus) -> ToggleIntent {
         guard desired else { return toggleAction(desired: desired, status: status) }
-        return canBePrompted ? toggleAction(desired: desired, status: status) : .openSystemSettings
+        guard canBePrompted else {
+            return status == .notApplicable ? .nothing : .openSystemSettings
+        }
+        return toggleAction(desired: desired, status: status)
     }
 
     var canBePrompted: Bool {

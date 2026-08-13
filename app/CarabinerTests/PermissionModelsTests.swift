@@ -256,3 +256,86 @@ extension PermissionModelsTests {
                        toggleAction(desired: false, status: .granted))
     }
 }
+
+// MARK: - Review fix round 1
+
+extension PermissionModelsTests {
+    // MARK: Finding 1 — browserButton must key off ANY known browser, not just the one
+    // MenuBarController happens to have configured for cookie-reading. Nothing pinned
+    // WHICH key got read before this, which is exactly how a Safari-only user's check-in
+    // at `lastSeen["safari"]` went silently unread.
+
+    func testMostRecentBrowserCheckInPicksTheFreshestAcrossAllKeys() {
+        let now = Date()
+        let dict = ["chrome": now.addingTimeInterval(-100), "safari": now.addingTimeInterval(-10)]
+        XCTAssertEqual(mostRecentBrowserCheckIn(dict), now.addingTimeInterval(-10))
+    }
+
+    func testMostRecentBrowserCheckInIsNilWhenNoBrowserHasCheckedIn() {
+        XCTAssertNil(mostRecentBrowserCheckIn([:]))
+    }
+
+    /// The actual regression: a Safari-ONLY check-in (no Chrome entry at all) must count.
+    /// A version of this logic keyed to a single hardcoded browser would return nil here.
+    func testMostRecentBrowserCheckInCountsSafariAlone() {
+        let now = Date()
+        XCTAssertEqual(mostRecentBrowserCheckIn(["safari": now]), now)
+    }
+
+    // MARK: Finding 3 — PermissionStatus.notApplicable
+
+    func testNotApplicablePresentationHasNoButtonAndExplainsWhy() {
+        let p = PermissionRow.fullDiskAccess.presentation(for: .notApplicable)
+        XCTAssertNil(p.buttonTitle)
+        XCTAssertEqual(p.action, .none)
+        XCTAssertEqual(p.detail, "Only needed if you use Safari")
+    }
+
+    /// Nothing to request when there's nothing missing — pins the case `toggleAction`
+    /// gained alongside `.notApplicable`.
+    func testToggleActionOnNotApplicableIsNothing() {
+        XCTAssertEqual(toggleAction(desired: true, status: .notApplicable), .nothing)
+    }
+
+    /// The property Finding 3 actually asked for: a non-promptable row (fullDiskAccess)
+    /// must NOT deep-link when there's nothing to grant — the blanket "not promptable ->
+    /// openSystemSettings" override from fix round 0 would otherwise still send a
+    /// Chrome-only user to the Privacy pane.
+    func testFullDiskAccessNotApplicableDoesNothing() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: .notApplicable), .nothing)
+    }
+
+    /// notApplicable must not silently become the new "always deep-link" default for every
+    /// non-promptable row forever — pin that the three real actionable statuses are
+    /// unaffected by adding this case.
+    func testFullDiskAccessStillDeepLinksAtTheRealActionableStatuses() {
+        for status: PermissionStatus in [.notDetermined, .denied, .targetNotRunning] {
+            XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: status),
+                           .openSystemSettings)
+        }
+    }
+
+    // MARK: Finding 3 / "ALSO FIX" — fullDiskAccessStatus(fd:errno:), the riskiest new
+    // green tick in the task, previously with zero test coverage.
+
+    func testFullDiskAccessStatusGrantedOnASuccessfulOpen() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: 3, errno: 0), .granted)
+    }
+
+    func testFullDiskAccessStatusDeniedOnEPERM() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: EPERM), .denied)
+    }
+
+    /// The absent-file case Finding 3 is entirely about: ENOENT must read as "not
+    /// applicable", not "denied" — conflating them is what invited Chrome-only users to
+    /// grant a permission they will never need.
+    func testFullDiskAccessStatusNotApplicableOnENOENT() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: ENOENT), .notApplicable)
+    }
+
+    /// Any other errno is a genuinely unexpected failure — must not be read as either a
+    /// grant or a denial.
+    func testFullDiskAccessStatusUnexpectedErrnoIsNotDetermined() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: EIO), .notDetermined)
+    }
+}
