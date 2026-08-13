@@ -41,11 +41,28 @@ enum GrabGate {
         "instagram.com", "youtube.com", "youtu.be", "pinterest.com",
     ]
 
-    static func check(origin: String?, url: String?) -> GateVerdict {
+    /// Single source of truth for "is this Origin header value one we accept" — used by
+    /// both `check` below (the POST /grab gate) and the listener's OPTIONS preflight
+    /// (GrabServer.swift). Before this existed, the preflight path re-implemented half of
+    /// this check by hand (the scheme-prefix test alone, without `isWellFormedOrigin`'s
+    /// character-set validation) and echoed the raw result into a response header — so a
+    /// bare CR or LF inside the Origin value could survive preflight and be written
+    /// unencoded into `Access-Control-Allow-Origin`. Not reachable from a web page (the
+    /// browser sets Origin, a page cannot forge it), but two origin checks that can
+    /// disagree is exactly the drift that becomes a real hole later; now there is one.
+    /// Returns the origin unchanged — nothing to re-serialise here, unlike the URL case
+    /// below, because an accepted origin's host already contains only characters from
+    /// `originHostCharacters`.
+    static func checkOrigin(_ origin: String?) -> String? {
         guard let origin,
               let scheme = allowedOriginSchemes.first(where: { origin.hasPrefix($0) }),
               isWellFormedOrigin(origin, scheme: scheme)
-        else {
+        else { return nil }
+        return origin
+    }
+
+    static func check(origin: String?, url: String?) -> GateVerdict {
+        guard checkOrigin(origin) != nil else {
             return .rejected(status: 403, reason: "origin not an extension")
         }
         // https only: an extension only ever originates these four hosts over https, and

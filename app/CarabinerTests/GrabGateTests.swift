@@ -146,4 +146,37 @@ final class GrabGateTests: XCTestCase {
         XCTAssertEqual(status, 403)
         XCTAssertEqual(reason, "origin not an extension")
     }
+
+    // --- checkOrigin, the single source of truth Finding 1 introduced ---
+    // GrabServer's OPTIONS preflight used to re-implement half of this check by hand (a
+    // bare scheme-prefix test with none of isWellFormedOrigin's character-set
+    // validation) and echo the result straight into a response header. These pin that
+    // `checkOrigin` — now the ONLY thing either call site consults — agrees with `check`
+    // in both directions, including the exact injection shapes the preflight path used
+    // to let through.
+    func testCheckOriginAcceptsExtension() {
+        XCTAssertEqual(GrabGate.checkOrigin("chrome-extension://abcdefghijklmnop"),
+                       "chrome-extension://abcdefghijklmnop")
+        XCTAssertEqual(GrabGate.checkOrigin("safari-web-extension://1E7A-UUID"),
+                       "safari-web-extension://1E7A-UUID")
+    }
+    func testCheckOriginRejectsWebPage() {
+        XCTAssertNil(GrabGate.checkOrigin("https://www.instagram.com"))
+    }
+    func testCheckOriginRejectsMissing() {
+        XCTAssertNil(GrabGate.checkOrigin(nil))
+    }
+    // A bare CR with no matching LF: the preflight path's old hand-rolled check
+    // (`origin.hasPrefix(scheme)`) would have passed this straight through to be echoed
+    // into `Access-Control-Allow-Origin` — CR alone is outside `originHostCharacters`,
+    // so `checkOrigin` (routing through `isWellFormedOrigin`) rejects it.
+    func testCheckOriginRejectsBareCR() {
+        XCTAssertNil(GrabGate.checkOrigin("chrome-extension://a\rinjected"))
+    }
+    // Same shape, bare LF: the two characters that together form the CRLF a response
+    // header is terminated by — each alone must already be enough to reject, not just
+    // the pair.
+    func testCheckOriginRejectsBareLF() {
+        XCTAssertNil(GrabGate.checkOrigin("chrome-extension://a\ninjected"))
+    }
 }
