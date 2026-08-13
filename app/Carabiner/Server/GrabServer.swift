@@ -2,8 +2,9 @@ import Foundation
 import Network
 
 /// A loopback-only HTTP/1.1 listener for the browser extension. Hand-rolled rather than
-/// pulling in a server package: it serves exactly two routes and the whole surface is
-/// small enough to audit, which matters for something holding an open port.
+/// pulling in a server package: it serves a handful of routes (`/health`, `/grab`) and
+/// the whole surface is small enough to audit, which matters for something holding an
+/// open port.
 ///
 /// Bound to 127.0.0.1 ONLY. Never 0.0.0.0 — that would expose it to the network.
 final class GrabServer {
@@ -22,6 +23,27 @@ final class GrabServer {
     /// local requests of a few hundred bytes; a few seconds is generous for a legitimate
     /// client and short enough that a stuck one clears itself.
     private static let connectionTimeout: TimeInterval = 5
+    /// A `/grab` that has cleared `GrabGate` and won the busy check is no longer an
+    /// ordinary request-response exchange — it stays open for the whole download +
+    /// re-encode, which routinely runs past `connectionTimeout`. Swapping to this much
+    /// longer bound (rather than dropping the deadline for the connection entirely) is
+    /// deliberate: `GrabRunner` sets no timeout of its own on the `carabiner` child
+    /// process, so a genuinely hung grab (a network stall, a script that never exits)
+    /// would otherwise hold this connection's file descriptor open for the life of the
+    /// app — exactly the leak `connectionTimeout` was added to close (see Task 6,
+    /// Finding 2). Ten minutes is far beyond any real grab (gotcha #21: a full re-encode
+    /// is ~12s; a carousel is a handful of those) but still finite, so a truly stuck
+    /// child process eventually loses its fd instead of holding it forever.
+    private static let streamingTimeout: TimeInterval = 600
+
+    /// Pure: which deadline applies to a connection, given whether it has become a
+    /// streaming `/grab`. The only thing worth unit-testing about the deadline policy —
+    /// everything else about it (scheduling, cancelling, rearming a real `NWConnection`)
+    /// needs a live socket and isn't (see `test-progress`/Task 6's own note that this
+    /// class of behaviour is verified by requests completing normally, not in isolation).
+    static func deadline(forStreamingGrab streaming: Bool) -> TimeInterval {
+        streaming ? streamingTimeout : connectionTimeout
+    }
 
     // `state` and `lastSeen` are both confined to the MAIN queue — the discipline picked
     // for Finding 3, because task 9's onboarding UI reads both from main and that is the
@@ -80,16 +102,29 @@ final class GrabServer {
         // A deadline, not a read timeout: simpler to reason about (one timer per
         // connection, cancelled implicitly by the connection itself finishing — cancel()
         // on an already-cancelled NWConnection is a documented no-op) and sufficient,
-        // since a legitimate request completes in well under this window.
-        connQueue.asyncAfter(deadline: .now() + Self.connectionTimeout) {
-            connection.cancel()
+        // since a legitimate request completes in well under this window. Built as a
+        // cancellable `DispatchWorkItem` (rather than a bare closure) so `extendDeadline`
+        // below can call it off before it fires.
+        let initialDeadline = DispatchWorkItem { connection.cancel() }
+        connQueue.asyncAfter(deadline: .now() + Self.deadline(forStreamingGrab: false), execute: initialDeadline)
+        // Handed all the way down to `grab(_:on:extendDeadline:)`. Called exactly once,
+        // and only for a `/grab` that clears `GrabGate` and wins the busy check — every
+        // other outcome (malformed request, 404, 403, 409, `/health`) leaves
+        // `initialDeadline` ticking untouched, which is what still protects the listener
+        // against a client that stalls or never finishes sending a body. Rearms rather
+        // than just cancelling: see `streamingTimeout`'s doc comment for why an unbounded
+        // connection isn't the right replacement.
+        let extendForStreaming: () -> Void = {
+            initialDeadline.cancel()
+            let extended = DispatchWorkItem { connection.cancel() }
+            connQueue.asyncAfter(deadline: .now() + Self.deadline(forStreamingGrab: true), execute: extended)
         }
-        receiveRequest(connection, buffer: Data())
+        receiveRequest(connection, buffer: Data(), extendDeadline: extendForStreaming)
     }
 
     /// Reads until headers are complete and the declared body has arrived. Requests here
     /// are a few hundred bytes; anything over 64 KB is refused rather than buffered.
-    private func receiveRequest(_ c: NWConnection, buffer: Data) {
+    private func receiveRequest(_ c: NWConnection, buffer: Data, extendDeadline: @escaping () -> Void) {
         c.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buf = buffer
@@ -100,24 +135,107 @@ final class GrabServer {
             }
             switch HTTPRequest.parse(buf) {
             case .complete(let request):
-                self.route(request, on: c)
+                self.route(request, on: c, extendDeadline: extendDeadline)
             case .malformed(let reason):
                 // A garbled Content-Length (Finding, minor) would otherwise sit waiting
                 // for bytes that can never satisfy it until the connection deadline fires
                 // — respond now instead of guessing at a byte count.
                 self.respond(c, status: 400, body: reason)
             case .incomplete:
-                if isComplete { c.cancel() } else { self.receiveRequest(c, buffer: buf) }
+                if isComplete { c.cancel() } else { self.receiveRequest(c, buffer: buf, extendDeadline: extendDeadline) }
             }
         }
     }
 
-    private func route(_ request: HTTPRequest, on c: NWConnection) {
+    private func route(_ request: HTTPRequest, on c: NWConnection, extendDeadline: @escaping () -> Void) {
         if request.method == "OPTIONS" { return preflight(request, on: c) }
         switch request.path {
         case "/health": health(request, on: c)
+        case "/grab": grab(request, on: c, extendDeadline: extendDeadline)
         default: respond(c, status: 404, body: "no such route")
         }
+    }
+
+    /// Gated entirely through `GrabGate.check` — no second origin/host check lives here.
+    /// Refuses rather than queues a second concurrent grab (409): a queue would let a
+    /// stray double-click stack grabs the user can no longer see or cancel, and the app
+    /// has exactly one status-item ring and one working banner to represent "busy" with.
+    private func grab(_ request: HTTPRequest, on c: NWConnection, extendDeadline: @escaping () -> Void) {
+        guard request.method == "POST" else { return respond(c, status: 404, body: "POST only") }
+        let payload = (try? JSONSerialization.jsonObject(with: Data(request.body.utf8))) as? [String: Any]
+        switch GrabGate.check(origin: request.origin, url: payload?["url"] as? String) {
+        case .rejected(let status, let reason):
+            NSLog("Carabiner: /grab rejected (%d) — %@", status, reason)
+            // NOT `origin: request.origin` (the brief's snippet, and this task's first
+            // draft) — an origin the gate itself just rejected must never be echoed into
+            // `Access-Control-Allow-Origin`, or a hostile page's own arbitrary Origin gets
+            // reflected straight back, which is the same class of hole as echoing `*`
+            // (verified: it let `https://evil.example` read its own 403 body). Re-run
+            // `checkOrigin` so a bad-*origin* rejection (403) omits the header entirely —
+            // matching `preflight`/`health`'s existing behaviour on the same failure — while
+            // a bad-*URL* rejection (400, origin already valid) still echoes it, since that
+            // is a legitimate extension the response should be readable to.
+            respond(c, status: status, origin: GrabGate.checkOrigin(request.origin), body: reason)
+        case .ok(let url):
+            let browser = Browser(rawValue: (payload?["browser"] as? String) ?? "") ?? .chrome
+            if let name = payload?["browser"] as? String {
+                DispatchQueue.main.async { [weak self] in self?.lastSeen[name] = Date() }
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let controller = self.controller else {
+                    self?.respond(c, status: 500, origin: request.origin, body: "no controller"); return
+                }
+                guard !controller.isBusy else {
+                    self.respond(c, status: 409, origin: request.origin, body: "a grab is already running")
+                    return
+                }
+                self.stream(url: url, browser: browser, controller: controller,
+                            origin: request.origin, on: c, extendDeadline: extendDeadline)
+            }
+        }
+    }
+
+    /// Sends headers immediately, then one NDJSON line per event, then the terminal
+    /// result. The connection stays open for the whole grab — that open connection IS
+    /// the progress channel.
+    private func stream(url: String, browser: Browser, controller: MenuBarController,
+                        origin: String?, on c: NWConnection, extendDeadline: () -> Void) {
+        // Past this point the connection is a legitimate, running grab — trade the short
+        // request-response deadline for the long streaming one before doing anything else,
+        // so nothing between here and the first byte of the response can race the old timer.
+        extendDeadline()
+
+        var head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n"
+        if let origin { head += "Access-Control-Allow-Origin: \(origin)\r\n" }
+        head += "Cache-Control: no-store\r\nConnection: close\r\n\r\n"
+        c.send(content: Data(head.utf8), completion: .contentProcessed { _ in })
+
+        let write: (String) -> Void = { line in
+            c.send(content: Data(line.utf8), completion: .contentProcessed { _ in })
+        }
+        // The app still posts its own banner: it is what reports the filename and the
+        // @user. The in-page ring is additional feedback, not a replacement.
+        controller.notifyGrabStarted()
+        controller.grab(
+            url: url,
+            browser: browser,
+            observer: { event in write(GrabEvent.line(for: event)) },
+            userObserver: { user in write(GrabEvent.line(forUser: user)) },
+            completion: { result in
+                // NOT `write(...); c.cancel()` (the brief's snippet, and this task's
+                // first draft) — `write` fires `c.send` and returns immediately, so a
+                // `cancel()` right after it races the in-flight send: `NWConnection`
+                // does not guarantee an enqueued send survives a `cancel()` that lands
+                // before its own completion handler runs. Verified against the real
+                // bundled binaries: a grab whose only output was one `probe` marker
+                // before erroring closed the connection with the `probe` line delivered
+                // and the terminal `result` line silently dropped — the client saw the
+                // stream end with no outcome at all. `respond(_:status:...)` below
+                // already gets this right (`cancel()` nested inside the send's own
+                // completion); this is that same fix for the terminal line here.
+                let line = GrabEvent.line(for: result)
+                c.send(content: Data(line.utf8), completion: .contentProcessed { _ in c.cancel() })
+            })
     }
 
     private func health(_ request: HTTPRequest, on c: NWConnection) {

@@ -74,6 +74,12 @@ final class MenuBarController: NSObject {
     /// GrabServer's 409 path.
     var isBusy: Bool { busy }
 
+    /// The hotkey posts this itself before the tab read; the browser button has no tab
+    /// read, so its caller (GrabServer) posts it at the moment the request arrives —
+    /// otherwise the user would see no feedback at all during the network round trip
+    /// before `grab(url:browser:...)`'s own progress events start arriving.
+    func notifyGrabStarted() { notifier.grabStarted() }
+
     @objc func grab() {
         // Every outcome below is reported by notification, so if notifications are
         // unavailable the app has no voice at all — a failed grab looks exactly like a
