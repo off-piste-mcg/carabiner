@@ -43,10 +43,22 @@ final class GrabServer {
     /// for lunch. Counting that time against this deadline would cancel the connection
     /// mid-dialog with no terminal `result` line while the grab itself goes on, behind
     /// the scenes, to succeed: the extension's stream would die silently while the app's
-    /// own banner correctly reports success. `stream`'s observer pauses this deadline
-    /// entirely for the duration of the prompt and only re-arms it once a real,
+    /// own banner correctly reports success. `stream`'s observer swaps this deadline for
+    /// `pausedTimeout` for the duration of the prompt and only restores it once a real,
     /// machine-driven event follows — see `deadlineAction(for:paused:)`.
     private static let streamingTimeout: TimeInterval = 600
+    /// The backstop while waiting on the carousel dialog (fix round 2; Finding 1).
+    /// Round 1 handled the prompt by CANCELLING the deadline outright — `pauseForPrompt`
+    /// nilled the pending work item and armed nothing. That reopens exactly the fd leak
+    /// `connectionTimeout` exists to close, just gated on a different trigger: if the
+    /// child hangs on or right after the dialog and never emits another marker,
+    /// `completion` never fires, nothing ever re-arms, and the connection, its
+    /// per-connection queue and its `NWConnection` stay open for the life of the app. A
+    /// human answering a dialog should not be on a 10-minute clock — but they SHOULD be
+    /// on some clock. One hour is generous enough that no real person answering a real
+    /// dialog will ever hit it, while still being finite, so a hung child process loses
+    /// its fd eventually instead of holding it forever.
+    private static let pausedTimeout: TimeInterval = 3600
 
     /// Pure: which deadline applies to a connection, given whether it has become a
     /// streaming `/grab`. The only thing worth unit-testing about the deadline policy —
@@ -57,22 +69,36 @@ final class GrabServer {
         streaming ? streamingTimeout : connectionTimeout
     }
 
+    /// The bound applied while on the carousel-dialog backstop (fix round 2, Finding 1).
+    /// A separate accessor rather than folding into `deadline(forStreamingGrab:)` — that
+    /// function answers a different axis ("streaming or not"), not "on the prompt
+    /// backstop or not" — but exposed the same way, as a plain static function, so a test
+    /// can pin its relationship to the other bounds without `pausedTimeout` needing to be
+    /// anything but `private`.
+    static func pausedDeadline() -> TimeInterval { pausedTimeout }
+
     /// What, if anything, should happen to a streaming connection's deadline in response
-    /// to the next progress event. Pure — the actual cancelling/rearming of a live
-    /// `NWConnection`'s timer lives in `stream`'s observer closure; this is only the
-    /// decision it acts on. `paused` is the caller's current belief about whether the
-    /// deadline is armed right now (`stream` tracks this as local state, since it is the
-    /// one place that owns the sequence of events for a given grab).
-    enum DeadlineAction: Equatable { case pause, resume, none }
+    /// to the next progress event. Pure — the actual rearming of a live `NWConnection`'s
+    /// timer lives in `stream`'s observer closure; this is only the decision it acts on.
+    /// `paused` is the caller's current belief about whether the connection is currently
+    /// on the long `pausedTimeout` backstop rather than the ordinary streaming one
+    /// (`stream` tracks this as local state, since it is the one place that owns the
+    /// sequence of events for a given grab).
+    ///
+    /// Three outcomes, not two (fix round 2): `.backstop` no longer means "cancel the
+    /// deadline" — a paused connection is always on SOME timer, just a much longer one.
+    /// `[.prompt] then nothing ever again` must still terminate the connection
+    /// eventually, which a bare cancel-and-forget cannot guarantee.
+    enum DeadlineAction: Equatable { case backstop, resume, none }
 
     static func deadlineAction(for event: ProgressEvent, paused: Bool) -> DeadlineAction {
         switch event {
         // `.prompt` can in principle repeat (defensive, not expected from the engine
-        // today) — already paused means there is nothing further to pause.
-        case .prompt: return paused ? .none : .pause
-        // Any OTHER event arriving while paused means the human answered the dialog and
-        // the engine is back to machine-driven work — resume the clock. While not
-        // paused, no other event changes anything.
+        // today) — already on the backstop means there is nothing further to arm.
+        case .prompt: return paused ? .none : .backstop
+        // Any OTHER event arriving while on the backstop means the human answered the
+        // dialog and the engine is back to machine-driven work — resume the ordinary
+        // streaming clock. Off the backstop, no other event changes anything.
         default: return paused ? .resume : .none
         }
     }
@@ -139,10 +165,10 @@ final class GrabServer {
         //
         // Boxed in a class, not a local `let`, because this connection's deadline is
         // re-armed repeatedly over its life — 5s at accept, extended to 600s once a real
-        // grab starts streaming, then paused/resumed around the carousel dialog (Finding
-        // 2, fix round 1) — and every one of those needs to cancel whichever
-        // `DispatchWorkItem` is *actually* pending right now, not a stale reference to
-        // whichever one was scheduled first.
+        // grab starts streaming, then swapped for the 1hr backstop and back around the
+        // carousel dialog (Finding 2, fix round 1; Finding 1, fix round 2) — and every one
+        // of those needs to cancel whichever `DispatchWorkItem` is *actually* pending
+        // right now, not a stale reference to whichever one was scheduled first.
         final class PendingDeadline { var workItem: DispatchWorkItem? }
         let pendingDeadline = PendingDeadline()
         func arm(_ interval: TimeInterval) {
@@ -153,24 +179,26 @@ final class GrabServer {
         }
         arm(Self.deadline(forStreamingGrab: false))
 
-        // Both handed all the way down to `grab(_:on:extendDeadline:pauseDeadline:)`.
+        // Both handed all the way down to `grab(_:on:extendDeadline:backstopDeadline:)`.
         // `extendDeadline` is called exactly once for the initial 5s→600s transition, and
-        // again as the "resume" half of the prompt pause/resume cycle — both are the same
-        // operation, "arm the long deadline". `pauseDeadline` is called only around
-        // `::progress:prompt`. Every other outcome (malformed request, 404, 403, 409,
-        // `/health`, a `/grab` that never streams) leaves the original 5s deadline ticking
-        // untouched, which is what still protects the listener against a client that
-        // stalls or never finishes sending a body.
+        // again as the "resume" half of the prompt backstop/resume cycle — both are the
+        // same operation, "arm the ordinary streaming deadline". `backstopDeadline` is
+        // called only around `::progress:prompt`, and — fix round 2, Finding 1 — ARMS the
+        // long `pausedTimeout` rather than cancelling outright, so a connection can never
+        // be left with nothing scheduled while paused. Every other outcome (malformed
+        // request, 404, 403, 409, `/health`, a `/grab` that never streams) leaves the
+        // original 5s deadline ticking untouched, which is what still protects the
+        // listener against a client that stalls or never finishes sending a body.
         let extendForStreaming: () -> Void = { arm(Self.deadline(forStreamingGrab: true)) }
-        let pauseForPrompt: () -> Void = { pendingDeadline.workItem?.cancel(); pendingDeadline.workItem = nil }
+        let backstopForPrompt: () -> Void = { arm(Self.pausedTimeout) }
 
-        receiveRequest(connection, buffer: Data(), extendDeadline: extendForStreaming, pauseDeadline: pauseForPrompt)
+        receiveRequest(connection, buffer: Data(), extendDeadline: extendForStreaming, backstopDeadline: backstopForPrompt)
     }
 
     /// Reads until headers are complete and the declared body has arrived. Requests here
     /// are a few hundred bytes; anything over 64 KB is refused rather than buffered.
     private func receiveRequest(_ c: NWConnection, buffer: Data,
-                                extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
+                                extendDeadline: @escaping () -> Void, backstopDeadline: @escaping () -> Void) {
         c.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buf = buffer
@@ -181,7 +209,7 @@ final class GrabServer {
             }
             switch HTTPRequest.parse(buf) {
             case .complete(let request):
-                self.route(request, on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
+                self.route(request, on: c, extendDeadline: extendDeadline, backstopDeadline: backstopDeadline)
             case .malformed(let reason):
                 // A garbled Content-Length (Finding, minor) would otherwise sit waiting
                 // for bytes that can never satisfy it until the connection deadline fires
@@ -189,17 +217,17 @@ final class GrabServer {
                 self.respond(c, status: 400, body: reason)
             case .incomplete:
                 if isComplete { c.cancel() }
-                else { self.receiveRequest(c, buffer: buf, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline) }
+                else { self.receiveRequest(c, buffer: buf, extendDeadline: extendDeadline, backstopDeadline: backstopDeadline) }
             }
         }
     }
 
     private func route(_ request: HTTPRequest, on c: NWConnection,
-                       extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
+                       extendDeadline: @escaping () -> Void, backstopDeadline: @escaping () -> Void) {
         if request.method == "OPTIONS" { return preflight(request, on: c) }
         switch request.path {
         case "/health": health(request, on: c)
-        case "/grab": grab(request, on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
+        case "/grab": grab(request, on: c, extendDeadline: extendDeadline, backstopDeadline: backstopDeadline)
         default: respond(c, status: 404, body: "no such route")
         }
     }
@@ -209,7 +237,7 @@ final class GrabServer {
     /// stray double-click stack grabs the user can no longer see or cancel, and the app
     /// has exactly one status-item ring and one working banner to represent "busy" with.
     private func grab(_ request: HTTPRequest, on c: NWConnection,
-                      extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
+                      extendDeadline: @escaping () -> Void, backstopDeadline: @escaping () -> Void) {
         guard request.method == "POST" else { return respond(c, status: 404, body: "POST only") }
         let payload = (try? JSONSerialization.jsonObject(with: Data(request.body.utf8))) as? [String: Any]
         switch GrabGate.check(origin: request.origin, url: payload?["url"] as? String) {
@@ -257,7 +285,7 @@ final class GrabServer {
                     return
                 }
                 self.stream(url: url, browser: browser, controller: controller, origin: validOrigin,
-                            on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
+                            on: c, extendDeadline: extendDeadline, backstopDeadline: backstopDeadline)
             }
         }
     }
@@ -267,7 +295,7 @@ final class GrabServer {
     /// the progress channel.
     private func stream(url: String, browser: Browser, controller: MenuBarController,
                         origin: String?, on c: NWConnection,
-                        extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
+                        extendDeadline: @escaping () -> Void, backstopDeadline: @escaping () -> Void) {
         // Past this point the connection is a legitimate, running grab — trade the short
         // request-response deadline for the long streaming one before doing anything else,
         // so nothing between here and the first byte of the response can race the old timer.
@@ -283,15 +311,16 @@ final class GrabServer {
         }
         // Local to this one grab's event sequence — `stream` is the one place that sees
         // every event in order, so it's the natural owner of "is the deadline currently
-        // paused". Fed into the pure `deadlineAction` decision (Finding 2, fix round 1)
-        // rather than re-deriving it inline, so the actual pause/resume logic has exactly
-        // one implementation and it's the tested one.
+        // on the prompt backstop". Fed into the pure `deadlineAction` decision (Finding 2,
+        // fix round 1; Finding 1, fix round 2) rather than re-deriving it inline, so the
+        // actual backstop/resume logic has exactly one implementation and it's the tested
+        // one.
         var deadlinePaused = false
         let observer: (ProgressEvent) -> Void = { event in
             switch Self.deadlineAction(for: event, paused: deadlinePaused) {
-            case .pause:
+            case .backstop:
                 deadlinePaused = true
-                pauseDeadline()
+                backstopDeadline()
             case .resume:
                 deadlinePaused = false
                 extendDeadline()
@@ -336,7 +365,13 @@ final class GrabServer {
             DispatchQueue.main.async { [weak self] in self?.lastSeen[browser] = Date() }
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        respond(c, status: 200, origin: request.origin,
+        // `checkOrigin(request.origin)`, not `request.origin` (fix round 2, Finding 2 —
+        // the last site in the file still echoing the raw header). Safe today for the
+        // same distant-invariant reason the round-1 sites were (the `guard case .ok`
+        // above already implies `checkOrigin(request.origin) != nil`), but every echo
+        // site should be self-evidently safe on its own line, not dependent on a reader
+        // tracing that invariant back to the guard above.
+        respond(c, status: 200, origin: GrabGate.checkOrigin(request.origin),
                 contentType: "application/json",
                 body: "{\"app\":\"carabiner\",\"version\":\"\(version)\"}")
     }
