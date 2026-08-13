@@ -10,12 +10,15 @@
 // same reason (see ProgressModel.swift's ring-begins-on-first-download-marker logic,
 // which this module deliberately mirrors for the extension's own ring).
 //
-// Loaded by content.js via a dynamic import() of this file's web-accessible-resource URL
-// (content.js is a classic content script that stays in the isolated world — see its own
-// header comment for why a page-context `type="module"` <script> tag, this project's
-// first draft, was wrong) — a dynamic import from a content script is unaffected by the
-// background-worker module-loading constraint documented in worker.js and ndjson.js, so,
-// unlike ndjson.js, this file needs no importScripts workaround and can use normal export.
+// Loaded via grabTracker.js's static `import` (fix round 2: content.js no longer imports
+// this directly — grabTracker.js now owns the whole per-grab routing/watchdog lifecycle
+// and calls this internally), which is itself reached via a dynamic import() of a
+// web-accessible-resource URL from content.js, a classic content script that stays in the
+// isolated world — see content.js's own header comment for why a page-context
+// `type="module"` <script> tag, this project's first draft, was wrong. That dynamic
+// import is unaffected by the background-worker module-loading constraint documented in
+// worker.js and ndjson.js, so, unlike ndjson.js, this file needs no importScripts
+// workaround and can use normal export.
 
 /**
  * @param {{stage?: string, pct?: number, index?: number, total?: number}} event

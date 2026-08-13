@@ -59,11 +59,16 @@ async function run(msg, tabId) {
 
   const consume = (events) => {
     for (const event of events) {
+      // `...event` FIRST (fix round 2 minor): if a future GrabEvent ever emitted a field
+      // literally named `type` or `id`, spreading it AFTER ours would silently clobber
+      // the routing key and strand the button. GrabEvent.swift emits neither field today,
+      // so this is currently latent, not reachable — but which side wins should not
+      // depend on that staying true forever.
       if (event.result) {
         sawResult = true;
-        relay(tabId, { type: "done", id, ...event });
+        relay(tabId, { ...event, type: "done", id });
       } else {
-        relay(tabId, { type: "progress", id, ...event });
+        relay(tabId, { ...event, type: "progress", id });
       }
     }
   };

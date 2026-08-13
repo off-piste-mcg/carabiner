@@ -18,7 +18,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/shortcode.js", "src/ring.js", "src/containers.js"],
+      "resources": ["src/shortcode.js", "src/ring.js", "src/containers.js", "src/grabTracker.js"],
       "matches": ["*://*.instagram.com/*"]
     }
   ]
