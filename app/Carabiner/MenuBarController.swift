@@ -19,6 +19,10 @@ final class MenuBarController: NSObject {
     /// clicking "Grab current tab" can't fake a ✓.
     var hotkeyTestHandler: (() -> Void)?
     private var onboarding: OnboardingWindowController?
+    /// Set by App.swift once the listener starts. Weak: GrabServer's owner is App.swift,
+    /// not this controller — this is read-only access for onboarding (task 9) to report
+    /// the server's state, not a second owner.
+    weak var grabServer: GrabServer?
 
     override init() {
         super.init()

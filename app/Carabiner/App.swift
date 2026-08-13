@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let delegate = AppDelegate()
 
     private var menuBar: MenuBarController?
+    private var grabServer: GrabServer?
 
     static func main() {
         let app = NSApplication.shared
@@ -23,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = MenuBarController()
         menuBar = controller
         Hotkey.onGrab { [weak controller] in controller?.hotkeyFired() }
+        // Ship the socket before the grab route (task 7): a failure here is unambiguous —
+        // it shows up in onboarding rather than as a button that silently does nothing.
+        let server = GrabServer(controller: controller)
+        server.start()
+        grabServer = server
+        controller.grabServer = server
         // No unconditional notification request any more: on a fresh install the setup
         // window is the only thing that triggers permission prompts, so every prompt
         // appears next to its explanation instead of naked at first launch.
