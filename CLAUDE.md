@@ -12,17 +12,28 @@ A local macOS tool that takes a pasted URL (Instagram first; YouTube / Pinterest
 secondary), auto-detects image vs video, handles carousels (all slides OR one specific
 slide via `img_index`), and saves clean files.
 
-**Two front ends, one engine.** The bash `carabiner` script does all the grabbing; both
-front ends just call it.
+**Three front ends, one engine.** The bash `carabiner` script does all the grabbing; every
+front end just calls it.
 
 1. **`Carabiner.app`** (`app/`) — the native menu-bar app. **This is the primary UX going
    forward.** Open a post → ⌃⌥⌘V → file in `~/Downloads` + a branded notification.
    Currently dev-machine only: distribution needs Developer ID signing (spec phase 4).
 2. **The macOS Shortcut** — the zero-install fallback for anyone who doesn't want the app,
    and how the tool shipped originally. Stays supported.
+3. **The browser extension** (`extension/`) — an in-page download button on Instagram
+   posts, for Chrome and Safari. It is a new way to **ask**, not a new way to download:
+   it reads the post's shortcode out of the page and hands
+   `https://www.instagram.com/p/<code>/` to `Carabiner.app` over a loopback HTTP channel,
+   which runs the same script the hotkey does. No API scraping, no CDN URLs, no download
+   code in the extension — so cookies, carousels, the QuickTime re-encode, filenames,
+   `@user` attribution and the banners all keep working with no new code. It exists
+   because the hotkey can only ever grab what the *tab URL* points at, which is useless
+   on a feed (`instagram.com/`) or a profile grid (`instagram.com/<handle>/`). See
+   `docs/superpowers/specs/2026-08-12-browser-extension-design.md`.
 
-They **cannot share a hotkey** — a global chord has exactly one owner (gotcha #14). If a
-teammate installs the app, they unbind the Shortcut's hotkey, or vice versa.
+The app and the Shortcut **cannot share a hotkey** — a global chord has exactly one owner
+(gotcha #14). If a teammate installs the app, they unbind the Shortcut's hotkey, or vice
+versa. The extension is not in that fight: it has no chord, and it works alongside either.
 
 ## The single most important architectural fact
 
@@ -105,6 +116,27 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   cd app && xcodegen generate && xcodebuild -scheme Carabiner -configuration Debug build
   ```
   The app and the Shortcut cannot share a hotkey (gotcha #14) — pick one.
+- **`extension/`** — **the in-page Instagram button (MV3, one source tree, two builds).**
+  A content script finds post containers, derives the permalink and injects a button in a
+  **shadow root**; the background service worker — and only it, see gotcha #30 — POSTs
+  `{url, browser}` to the app at **`http://127.0.0.1:51847/grab`** and reads back an NDJSON
+  stream of the same `::progress:` events that drive the menu-bar ring, which the button
+  renders as its own ring. `GET /health` is how the app learns a browser's extension is
+  really there, which is what turns the onboarding row green. The port is **fixed and
+  hardcoded in two places** (`extension/manifest.json`'s `host_permissions` and
+  `extension/src/worker.js`'s `ENDPOINT`); if it ever changes, both change together. A
+  failed bind deliberately does **not** fall back to another port — the extension has no
+  way to discover a moved one, so that would present as a button that does nothing.
+  (Verified: `EADDRINUSE` → `GrabServer.state = .failed`, and `allowLocalEndpointReuse`
+  does not permit co-binding. But nothing outside `GrabServer` reads that state yet — see
+  "Known rough edges".) Access control is two gates, no pairing token: the `Origin` must
+  be `chrome-extension://` or `safari-web-extension://` (a page cannot forge `Origin`, and
+  Safari's is a per-install UUID so exact-ID allowlisting was never possible), and the URL
+  must match the Instagram/YouTube/Pinterest allowlist, https only. Safari ships as an
+  app-extension target (`app/CarabinerSafariExtension`) inside `Carabiner.app`, so Safari
+  users install nothing extra; Chrome is an unlisted Web Store listing that **does not
+  exist yet**. Scope is Instagram feed / profile grid / permalink pages — no Stories, no
+  other sites (the hotkey stays the answer for YouTube and Pinterest).
 - **`files/`** — original seed: proven `igdl`/`igdls` functions + the `ig-grab.js`
   bookmarklet. Reference only.
 - **`Carabiner_svg.svg`** (repo root) — the original brand-source SVG the status-bar icon
@@ -120,8 +152,13 @@ the zero-install fallback for anyone who doesn't want the app. Both drive the sa
 
 ## Working on this project
 
-**Where things are:** `carabiner` (the engine, bash, repo root) · `app/` (the Swift app)
-· `test/` (offline shell tests, no network — `test-path.sh` covers the `CARABINER_BIN`
+**Where things are:** `carabiner` (the engine, bash, repo root) · `app/` (the Swift app;
+`app/Carabiner/Server/` is the extension's loopback listener and its pure origin/URL gate,
+`app/CarabinerSafariExtension/` is the thin appex wrapper that makes Safari load the
+extension out of `Carabiner.app`) · `extension/` (the MV3 extension itself — `src/` is the
+source of truth, `dist/` is a gitignored build product, `test/` is offline `node:test`
+coverage of the pure modules run with `node --test` from `extension/`) · `test/` (offline
+shell tests, no network — `test-path.sh` covers the `CARABINER_BIN`
 resolution order, `test/test-progress.sh` covers the progress markers offline (stubbed
 tools via `CARABINER_BIN`, no network), `test-release.sh` covers `release.sh`'s preflight
 gate against a real local Debug build) · `scripts/` (`deps.lock` + `fetch-deps.sh`, the
@@ -131,14 +168,24 @@ DMG → staple pipeline) · `.github/workflows/build-deps.yml`
 what's next") · `docs/superpowers/specs/` (design) · `docs/superpowers/plans/`
 (implementation plans) · `files/` (historical reference only, not part of the tool).
 
-**Building the app with bundled binaries** needs one extra step before `xcodegen`, and it
-is idempotent so it costs nothing to re-run:
+**Building the app now has two prerequisites before `xcodegen`, both idempotent, so it
+costs nothing to re-run them:**
 ```bash
 ./scripts/fetch-deps.sh   # ~42 MB on a cold run, then "✓ (cached)" forever
+./extension/build.sh      # allowlist-copies manifest.json/src/icons into the gitignored
+                          # extension/dist/chrome (+ the Chrome zip). REQUIRED before the
+                          # FIRST `xcodegen generate` on a fresh checkout: xcodegen
+                          # resolves the appex's sources at generate time and fails
+                          # outright ("missing source directory") without it. After that,
+                          # CarabinerSafariExtension's own preBuildScripts re-runs it on
+                          # every xcodebuild, so editing extension/src/*.js and rebuilding
+                          # picks the change up with no manual step. `scripts/release.sh`
+                          # runs it too, before xcodegen, for the fresh-checkout case.
 ```
-Skip it and you get a perfectly working app that quietly uses Homebrew instead — which is
-the whole failure mode gotcha #17 exists to warn about, so check `Resources/bin` is
-actually populated before concluding bundling works.
+Skip `fetch-deps.sh` and you get a perfectly working app that quietly uses Homebrew
+instead — which is the whole failure mode gotcha #17 exists to warn about, so check
+`Resources/bin` is actually populated before concluding bundling works. Skipping
+`extension/build.sh` fails loudly instead, at `xcodegen generate`.
 
 **The `CARABINER_BIN` contract** is the interface between the two front ends and the
 engine: the app sets it to its `Contents/Resources/bin` directory when a build has
@@ -177,7 +224,8 @@ Leave no unsigned copy of the same bundle id anywhere on disk — a stale `build
 DerivedData copy silently poisons notifications for the signed one.
 
 **Debugging the app.** It logs every meaningful step (`grab hotkey registered as …`,
-`grab hotkey fired`, `grabbing <url>`, `grab succeeded — <file>`). Those are `NSLog`, so
+`grab hotkey fired`, `grabbing <url> (cookies: <browser>)`, `grab succeeded — <file>`, and
+`extension server listening on 127.0.0.1:51847`). Those are `NSLog`, so
 they go to the unified log — but `log show` is often unreadable from a sandboxed shell. The
 reliable way to read them is to run the inner binary with output redirected, accepting that
 notifications won't work in that mode:
@@ -196,6 +244,15 @@ new since Phase 2 bundling started — before it, debugging via the app and debu
 `xcodebuild` → the `cp -R`/`open` steps above) before trusting an app-driven test of a
 script change; `CARABINER_NO_NOTIFY=1 ./carabiner …` directly is still the fast path for
 iterating on the script itself.
+
+The extension has the **same shape of trap and it is closed**: the Safari appex ships a
+copy of `extension/dist/chrome`, not `extension/src`. `CarabinerSafariExtension`'s
+`preBuildScripts` re-runs `extension/build.sh` on every `xcodebuild`, so a JS edit does
+reach the built appex without running anything by hand (verified by a canary edit reaching
+the built bundle). Chrome is a different story per install shape: "Load unpacked" against
+`extension/` reads `src/` directly, so a reload in `chrome://extensions` is enough — but a
+Chrome install made from `extension/dist/carabiner-chrome.zip` is a snapshot, so re-run
+`./extension/build.sh` before rebuilding that zip.
 
 **Verifying a grab worked — do NOT trust timestamps.** gallery-dl preserves Instagram's
 original mtime *and* birth time, so a freshly downloaded image can be dated weeks ago and
@@ -264,6 +321,95 @@ One trap left in the open: `releases/latest` resolves to the newest **non-prerel
 release, which is currently `deps-2026.07.1`. The README's download link is correct only
 while the app release is newest — publish future `deps-*` releases as **pre-releases** or
 they will steal the link and send teammates to a release with no DMG in it.
+
+**The browser extension: built, not yet shipped or driven end to end (2026-08-13,
+branch `feat/browser-extension`).** Eleven of twelve tasks are complete and reviewed;
+`extension/`'s offline suite is **55/55** (`node --test` from `extension/`, re-run for this
+doc pass). What a human has actually verified, and it is worth separating from what was
+merely built:
+
+- **Verified:** both browsers send an extension `Origin`, and Safari preflights where
+  Chrome doesn't (gotcha #29). Safari cookies need Full Disk Access, with a control run
+  (gotcha #28). The real Instagram markup is captured and the parser was fixed against it
+  (gotcha #31). The hotkey path still works after the shared-grab-path refactor.
+- **NOT verified, and must not be described as covered:** a real, successful Instagram
+  download through `POST /grab` — only a syntactically valid but nonexistent post was ever
+  pushed through it. Nor has the button been clicked in a real browser on instagram.com, in
+  either Chrome or Safari. The whole in-browser half of this feature is unexercised.
+
+What is left, all of it needing a human with a Google account and a logged-in browser:
+
+1. **The Chrome Web Store listing does not exist.** `OnboardingViewModel.chromeWebStoreURL`
+   is still `…/detail/PLACEHOLDER_ID`, so the Chrome row's Allow button opens a dead URL
+   today. Publishing it is a $5 one-off developer account, an **unlisted** listing, and a
+   privacy justification that says plainly what the `127.0.0.1` host permission is for
+   (handing the post URL to the companion app; the extension downloads nothing and collects
+   nothing). Then the real ID replaces the placeholder and the app is rebuilt.
+2. **Full end-to-end verification in both browsers**, snapshotting `~/Downloads` filenames
+   before and after each grab (never timestamps): a feed image, a profile-grid thumbnail, a
+   reel opened in QuickTime, and a **mixed video+image carousel** — gotcha #15's second
+   failure only shows on a mixed post, and gotcha #24's Cancel must download nothing and
+   post no banner.
+
+### Known rough edges in the extension work (deferred, not forgotten)
+
+None of these was a review finding left unfixed by accident — each was seen, judged
+non-blocking, and consciously deferred. They are recorded here because the working ledger
+that held them is scratch and is being deleted.
+
+**Reachability of a real failure:**
+
+- **`GrabRunner.run()` has no watchdog, and this is pre-existing, not new.** A hung
+  `carabiner` child pins `busy = true` for the life of the app: every `/grab` then returns
+  409 forever *and* the hotkey silently no-ops. The server's 600s deadline reclaims the
+  file descriptor but not the busy flag. This is the sharpest item on the list and deserves
+  a roadmap entry rather than a footnote.
+- **A failed listener bind is invisible to the user.** `GrabServer.state` becomes
+  `.failed(...)` and it is logged, but `state` is `private(set)` and nothing outside the
+  class reads it, so a port collision presents as a button that does nothing. The design
+  called for surfacing it in the onboarding row; that part was not built.
+- **Nothing stops the listener.** There is no `stop()`/`deinit`, so nothing cancels the
+  listener or in-flight connections on teardown.
+- **The 64 KB request cap and the 5s connection deadline have never been exercised over the
+  wire.** Both live in the I/O layer, which no test in this repo can reach. Worth one manual
+  `curl`/`nc` check before release.
+
+**Bounded leaks and inefficiencies, all judged acceptable:**
+
+- On normal completion nothing cancels the pending deadline work item, so a stale timer
+  holds a strong reference to an already-cancelled `NWConnection` for up to 600s (3600s if
+  the last event was a prompt). Not a file-descriptor leak.
+- A grab whose watchdog fired and which never sends another message stays in the
+  extension's tracking map for the tab's lifetime. This is the deliberate price of "amber
+  must not delete" (gotcha #33) — bounded by clicks per tab, two small closures each.
+- The container scan (`containers.js`, driven once per animation frame from `content.js`)
+  sweeps every anchor in the document and regexes each, which is strictly more work than
+  the CSS prefilter it replaced. Cheap and bounded, but it is the first place to look if
+  the page ever feels heavy.
+- Invalid UTF-8 or LF-only request framing never returns 400 — the parser cannot tell
+  incomplete from malformed there, so such a request waits out the deadline instead.
+
+**Latent, currently unreachable, worth knowing before touching that code:**
+
+- Absolute hrefs (`https://www.instagram.com/p/CODE/`) are not matched by the permalink
+  parser. Pre-existing; both real fixtures contain zero of them and Instagram does not
+  appear to emit them. Worth remembering if the button ever "just stops".
+- `GrabGate` returns `URL.absoluteString`, which neutralises CR/LF/space but **not** shell
+  metacharacters. Inert today because `GrabRunner` passes `[url]` as an argument array with
+  no shell involved, and inert in an HTTP header. It only matters if some future path
+  interpolates an accepted URL into a shell string.
+- Prose-only defect: the fixtures' comment counts are misstated in a test comment and in
+  commit messages (`permalink.html` actually has 13 comment permalinks / 14 post-shaped
+  anchors; `feed-post.html` has 2, not "one"). The *behaviour* and the counts in gotcha #31
+  are correct; only that prose is wrong.
+
+**Test-coverage limits, disclosed rather than papered over:**
+
+- `test/test-release.sh` checks the positive Developer-ID/timestamp direction against a
+  generic signed binary, not against a real Developer-ID-signed appex — no Developer ID
+  certificate exists on this machine. Structural, not a regression.
+- The pinning tests around the connection deadline have teeth at the pure-decision layer
+  only; see gotcha #34's last bullet.
 
 ## Working logic (proven — reuse, don't reinvent)
 
@@ -768,6 +914,212 @@ from the URL for "just this slide".
     does not remove what the `test` action added. That bundle does launch, so it will not
     announce itself — but it is not the app you are shipping. Use a separate derived-data
     path for a build you intend to install, or accept that you are testing a test host.
+
+28. **Safari's cookies need Full Disk Access, and nothing in the app can grant or even
+    prompt for it.** Confirmed 2026-08-13, with Safari quit so its cookie file was flushed:
+
+    ```
+    carabiner -b safari -s 1 'https://www.instagram.com/p/<code>/'
+    ERROR: [Errno 1] Operation not permitted:
+      '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'
+    ✗ download failed.
+    ```
+
+    **The control run is what makes that a diagnosis rather than a guess, and it is the
+    part worth copying:** the *same URL* with `-b chrome` downloaded the file fine. So it
+    is macOS denying the Safari cookie read — not a private post, not a bad URL, not a
+    broken engine. Without that control, "Operation not permitted" on an unfamiliar path
+    is indistinguishable from every other Instagram failure.
+
+    Consequences, all built:
+    - The Setup & Permissions window has a **Full Disk Access** row. macOS offers **no API
+      to grant it and — unlike Automation — none to prompt for it either**, so the row can
+      only *detect*, explain, and deep-link to
+      `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`.
+    - **Detect with `open()`, not `stat()`.** Measured by the reviewer on this machine:
+      `stat` on that cookie file **succeeds** while `open()` returns `EPERM`. An existence
+      check would therefore have produced a permanent false green — the one new row whose
+      whole job is honesty. `LivePermissionChecker` opens the file and classifies the
+      errno: `EPERM` → denied, success → granted, `ENOENT` → *not applicable* (Safari has
+      never run; reporting that as denied invites a Chrome-only user to grant the broadest
+      permission on macOS for nothing, and reporting it as granted is a tick with nothing
+      behind it).
+    - **Fallback:** on a Safari cookie-read failure `GrabRunner` retries once with Chrome's
+      cookies — the control above is the proof that path works — and flags
+      `usedFallbackBrowser` so the banner says so. A silent fallback would be lying by
+      omission: a different browser can mean a different Instagram account.
+    - The user-facing error names Full Disk Access explicitly.
+
+    **Open, never tested:** whether macOS requires **quitting and relaunching Carabiner**
+    for a fresh FDA grant to take effect in the already-running process. If it does, the
+    row reads red immediately after the user grants it and needs a "quit and reopen" note.
+    Nobody has checked.
+
+29. **Safari sends a CORS preflight where Chrome does not — `GrabServer`'s `OPTIONS`
+    handler is load-bearing for Safari alone.** Measured 2026-08-12 against a throwaway
+    listener that dumped raw request headers, with the extension loaded unpacked in Chrome
+    and converted for Safari. Chrome skips the preflight because
+    `http://127.0.0.1:51847/*` is in `host_permissions`; Safari preflights anyway. Delete
+    the `OPTIONS` handler as dead politeness and **Safari silently stops working while
+    Chrome carries on fine** — the worst shape a bug can have, because the obvious test
+    machine passes.
+
+    The same measurement pinned the origins, which is why the gate is a *scheme* check and
+    not an ID allowlist:
+
+    ```
+    Chrome → Origin: chrome-extension://ccngbaicbbcdhbppljflaagmbfpcjjcn   (the extension ID)
+    Safari → Origin: safari-web-extension://dcea6524-ab56-4469-895f-d4f4e84f139e
+    ```
+
+    Safari's is a **per-install UUID** — it differs on every machine, so exact-ID
+    allowlisting was never an option for Safari, whatever it may look like for Chrome.
+
+    **Reasoned, not yet measured, and the reason this belongs here:** the preflight answers
+    `204` for any path/method, with no `Access-Control-Allow-Methods` and no `Max-Age`. That
+    works today only because `POST` and `content-type` are CORS-safelisted. Add **any**
+    custom request header later — a pairing token is the obvious candidate — and Safari
+    breaks silently while Chrome keeps working, exactly as above. If you add a header, fix
+    the preflight in the same commit.
+
+    Also earned here: **the MV3 service worker is ephemeral and Safari kills it when idle.**
+    It vanishes from Develop → Web Extension Background Content mid-session, so any
+    debugging procedure that depends on catching it in an inspector console is unreliable —
+    the header measurement was only possible by making the worker fire its request at
+    startup. It matters beyond debugging, because the worker holds the streaming connection
+    for a whole grab. An in-flight `fetch` does reset the idle timer, but **that has not
+    been re-checked against a genuinely long carousel.**
+
+30. **Where the extension's JS runs decides both what it can call and what `Origin` it
+    sends. Two different mistakes, one root cause, and the first is the answer most sources
+    will give you.**
+
+    **(a) A content script injected as a page `<script>` runs in the MAIN world, where
+    `chrome.*` does not exist.** The plan for this feature specified exactly that — a
+    `loader.js` that appended `<script type="module">` to escape the "content scripts can't
+    use static `import`" limit. It does escape that limit, and it would have produced **no
+    button at all, in either browser, with no visible error**: `chrome.runtime.sendMessage`
+    and `chrome.runtime.onMessage` are bound only into the isolated world a content script
+    runs in, so every click and every incoming progress message would have thrown. Caught in
+    review before it shipped (it was never observed failing live — nobody built the broken
+    version to watch it break). The working pattern, and the documented one, is a **dynamic
+    `import()` of a web-accessible resource from a real content script**: it keeps you in
+    the isolated world with `chrome.*` intact, at the cost of an async IIFE. The plan doc is
+    annotated as superseded rather than deleted, because "inject a `<script type=module>`"
+    is what most sources say and it will be proposed again.
+
+    **(b) Only the service worker may call the app.** A `fetch` from the content script
+    carries `https://www.instagram.com` as its `Origin` and the app **correctly rejects it**
+    — that is gate 1 of gotcha #29 doing its job, not a bug to work around. Every outbound
+    call goes through `chrome.runtime.sendMessage` to `worker.js`, which owns the only
+    `fetch` in the extension. If a future change ever "simplifies" that by fetching from the
+    content script, the whole access-control story collapses into "any instagram.com page
+    can drive the app".
+
+    **Still unknown and worth checking first if the button is missing:** whether dynamic
+    `import()` from a content script survives instagram.com's CSP in the wild, and in Safari
+    at all. The tests run under jsdom; only a real browser answers it.
+
+31. **Instagram's post links are not all `/p/<code>/` — the profile grid uses
+    `/<handle>/p/<code>/`, and a post page is full of `/p/<code>/c/<id>/` comment
+    permalinks.** Found 2026-08-13, the moment real captured markup replaced the synthetic
+    fixtures. `shortcode.js`'s regex was anchored at the path start, so it matched
+    **nothing** on a profile grid: the button would never have appeared on any profile
+    page. **100% broken, silently, against a fully green test suite** — because the
+    fixtures were hand-written and encoded the same wrong assumption as the code they were
+    testing. Swapping in real markup turned 42 green tests into 38 pass / 4 fail
+    immediately.
+
+    **The lesson is gotcha #23's stub lesson in a new costume: a fixture you authored tests
+    your assumptions, not the world.** For anything that parses someone else's markup or
+    output, capture the real thing. What worked for capturing it (Wisse, in Chrome's
+    console): a one-liner that Blob-downloads `document.documentElement.outerHTML`.
+    **`copy()` silently produced an empty clipboard** on ~32 KB of markup — do not use it
+    for this.
+
+    Measured facts about the real fixtures, so nobody "fixes" a correct count: the feed
+    fixture yields **1** container, the profile grid **12**, and a permalink page **1** —
+    not 13, even though that page carries a dozen comment permalinks for the same post,
+    because they all dedupe into the one `<article>`. (An earlier "8 thumbnails" reading of
+    the grid was a `/p/`-only query; the other four tiles are `/reel/`.) The tests over
+    this were **mutation-checked** rather than trusted: reverting the anchored regex fails
+    8, reverting the prefix selector fails 2, dropping the article dedup fails 4.
+
+32. **Two XcodeGen behaviours will each cost you an afternoon on a Safari appex, and
+    neither announces itself.** Both hit 2026-08-13 while adding
+    `CarabinerSafariExtension`.
+
+    - **An `info:` block ALWAYS regenerates that target's `Info.plist` from `properties`,
+      silently discarding a hand-written file at the same path.** The appex's `NSExtension`
+      dictionary simply vanished. Confirmed by running `xcodegen` and watching it go. So
+      either the whole plist lives in `project.yml`, or the target has no `info:` block at
+      all — there is no "generate the basics and keep my additions".
+    - **A `type: folder` reference copies the folder under its OWN name**, one level deeper
+      than you meant. `../extension/dist/chrome` as a single folder reference put the
+      manifest at `Contents/Resources/chrome/manifest.json`. **Safari will not load an
+      extension whose `manifest.json` is not at the resource root, and nothing in the build
+      says a word about it.** The fix is three entries — `manifest.json` as a file, `src/`
+      and `icons/` as folder references — so the manifest lands at the root while the
+      subdirectories its own relative paths refer to stay real directories. This is the
+      same mechanism that puts `.deps/bin`'s *contents* at `Resources/bin/`; there it was
+      the behaviour we wanted, which is exactly why it is easy to walk into here.
+
+    Verify from the **built bundle**, never from the yml: manifest at the `Resources` root,
+    every manifest-referenced file present, and the appex hardened
+    (`codesign -dv` → `flags=0x10000(runtime)`).
+
+33. **A timeout must mean "no news", never a verdict — and "pause the timer" silently means
+    "no timer". This bit twice on the same day (2026-08-13), in two different components,
+    in two different ways.**
+
+    - **The app's connection deadline (`GrabServer`).** The carousel dialog can wait on a
+      human indefinitely, so the 600s deadline was made to *pause* on `::progress:prompt`. The
+      re-review walked the event sequences: `[prompt]` followed by **no further event** left
+      the deadline permanently unarmed, reinstating the file-descriptor leak the deadline
+      existed to prevent. Replaced with a finite **3600s backstop**. *A bound you relax must
+      stay a bound.*
+    - **The button's watchdog (`extension/src/grabTracker.js`).** The first version was
+      **terminal**: on timeout
+      it deleted the grab from the tracking map, so a late real outcome was dropped and a
+      long *successful* grab ended permanently amber. Reachable on three ordinary paths in
+      our own engine, traced not theorised: ffmpeg's silence during a re-encode (gotcha #21
+      measured 12.3s per 45s of video), gallery-dl emitting nothing after its first marker,
+      and the carousel dialog. That is **worse than the bug it replaced** — it misinforms
+      rather than under-informs. Now the amber state means "no news yet": a late `progress`
+      restores the ring, a late `done` corrects to a tick, and the dialog genuinely suspends
+      the watchdog. The 90s threshold is justified in the source against gotcha #21's
+      measured encode rate — 90s of silence covers roughly 5.5 minutes of source video
+      being re-encoded. Verified by driving the
+      *shipped* `grabTracker.js` with real timers outside the implementer's own harness.
+
+    When you write a timeout, finish the sentence "…and keep listening". If you can't, it
+    is a verdict, and it will be wrong sooner than you think.
+
+34. **A pure helper can be 100% tested while the CALL SITE that is supposed to use it is
+    not — the bug lives in the wiring, and helper-only tests cannot see it.** Found
+    2026-08-13, and *proved*, which is the point. The onboarding row read
+    `lastSeen[.chrome]` — hardcoded — so a Safari user's check-in was never read and the
+    row stayed grey forever, on a row that exists for Safari. The fix added a pure
+    `mostRecentBrowserCheckIn(_:)` plus tests. The reviewer then **mutated the call site
+    back to the hardcoded bug and watched all 199 tests still pass**: on a revert the
+    helper just becomes dead code, with no failure and no warning. That is the same gap
+    class that let the original bug ship.
+
+    The rule: **ask "would this test fail if the fix were reverted?" — and then actually
+    revert it and look.** The regression guard here was re-verified twice, independently:
+    the implementer reverted and saw red, and the re-reviewer repeated the whole mutation
+    itself rather than trusting the report.
+
+    Two neighbours from the same pass, same family:
+    - **Tests that pass when the code under test is deleted are theatre.** The first
+      persistence tests did exactly that; they were replaced with tests of the real
+      functions, including garbage input. "Untestable because it touches `UserDefaults`"
+      was also avoidable — a static taking a `UserDefaults` instance made it trivial.
+    - **Know where your tests stop having teeth.** `GrabServerTests` pins the pure decision
+      layer only; reverting `accept()`'s backstop *wiring* while leaving `deadlineAction`
+      intact would still pass every one of them. The file's own header says the I/O half
+      is not covered — say so where the tests live, rather than letting a green count
+      imply more than it means.
 
 ## Dependencies
 
