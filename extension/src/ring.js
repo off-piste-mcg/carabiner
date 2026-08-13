@@ -10,10 +10,12 @@
 // same reason (see ProgressModel.swift's ring-begins-on-first-download-marker logic,
 // which this module deliberately mirrors for the extension's own ring).
 //
-// Loaded by content.js as a real ES module (content.js runs as a `type="module"`
-// <script> injected by loader.js, which is unaffected by the background-worker
-// module-loading constraint documented in worker.js and ndjson.js) — so, unlike
-// ndjson.js, this file needs no importScripts workaround and can use normal export.
+// Loaded by content.js via a dynamic import() of this file's web-accessible-resource URL
+// (content.js is a classic content script that stays in the isolated world — see its own
+// header comment for why a page-context `type="module"` <script> tag, this project's
+// first draft, was wrong) — a dynamic import from a content script is unaffected by the
+// background-worker module-loading constraint documented in worker.js and ndjson.js, so,
+// unlike ndjson.js, this file needs no importScripts workaround and can use normal export.
 
 /**
  * @param {{stage?: string, pct?: number, index?: number, total?: number}} event

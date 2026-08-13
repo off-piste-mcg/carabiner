@@ -15,14 +15,25 @@ const ENDPOINT = "http://127.0.0.1:51847";
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type !== "grab") return false;
   const tabId = sender.tab?.id;
+  const id = msg.id;
   run(msg, tabId).catch((e) => {
-    relay(tabId, { type: "done", result: "error", message: String(e) });
+    relay(tabId, { type: "done", id, result: "error", message: String(e) });
   });
+  // Explicit and unconditional (fix round 1, Finding 3): this is the ack content.js
+  // checks for (`reply?.accepted`) to tell "the worker is alive and got the click" apart
+  // from a worker that never registered at all — the exact Safari importScripts risk
+  // this extension takes on. If the worker is dead, this listener never runs, sendMessage
+  // never gets a reply, and chrome.runtime.lastError fires on the sender's side instead
+  // (content.js checks that too) — this ack is the "worker is fine" half of that pair.
   sendResponse({ accepted: true });
   return true; // keep the message channel open for the async reply
 });
 
 async function run(msg, tabId) {
+  // Threaded through every relayed message so content.js can route it to the one button
+  // that owns this grab, not "whichever button was clicked most recently" (fix round 1,
+  // Finding 2 — a single implicit owner cross-wired two buttons on one post).
+  const id = msg.id;
   let response;
   try {
     response = await post(msg);
@@ -35,10 +46,10 @@ async function run(msg, tabId) {
     response = await post(msg);
   }
   if (response.status === 409) {
-    return relay(tabId, { type: "done", result: "error", message: "A grab is already running" });
+    return relay(tabId, { type: "done", id, result: "error", message: "A grab is already running" });
   }
   if (!response.ok) {
-    return relay(tabId, { type: "done", result: "error", message: `Carabiner said ${response.status}` });
+    return relay(tabId, { type: "done", id, result: "error", message: `Carabiner said ${response.status}` });
   }
 
   const reader = response.body.getReader();
@@ -50,9 +61,9 @@ async function run(msg, tabId) {
     for (const event of events) {
       if (event.result) {
         sawResult = true;
-        relay(tabId, { type: "done", ...event });
+        relay(tabId, { type: "done", id, ...event });
       } else {
-        relay(tabId, { type: "progress", ...event });
+        relay(tabId, { type: "progress", id, ...event });
       }
     }
   };
@@ -65,6 +76,11 @@ async function run(msg, tabId) {
     buffer = parsed.buffer;
     consume(parsed.events);
   }
+  // decoder.decode() with no arguments flushes any bytes still buffered for an incomplete
+  // multi-byte UTF-8 sequence split across the very last chunk boundary (fix round 1,
+  // minor) — without this, a trailing character could be silently lost instead of
+  // completing the final line.
+  buffer += decoder.decode();
   // The server always terminates its own last line with "\n" (GrabEvent.swift's encode
   // always appends one), but a connection that drops mid-write could still leave an
   // unterminated partial line sitting in `buffer` — give it one more chance to parse.
@@ -76,9 +92,10 @@ async function run(msg, tabId) {
   // something that is never coming — this is what makes that failure visible instead of
   // silent. This is a real fallback for a real failure mode within this function's
   // control; it is not a keepalive hack, and none was added speculatively for the
-  // separate, unverified risk of the worker being killed outright mid-stream.
+  // separate, unverified risk of the worker being killed outright mid-stream (content.js's
+  // own watchdog — fix round 1, Finding 6 — is what covers that side).
   if (!sawResult) {
-    relay(tabId, { type: "done", result: "error", message: "Connection closed unexpectedly" });
+    relay(tabId, { type: "done", id, result: "error", message: "Connection closed unexpectedly" });
   }
 }
 
