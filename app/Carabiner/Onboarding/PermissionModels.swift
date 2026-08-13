@@ -148,9 +148,18 @@ func notificationStatus(authorization: UNAuthorizationStatus,
 /// whether something is "probably installed". A stale check-in is not proof: two weeks
 /// covers a normal gap between grabs without letting a browser that was uninstalled months
 /// ago keep reading as connected forever.
+///
+/// A FUTURE check-in is not proof either (review fix round 2, Finding 4). `lastSeen` is now
+/// persisted (round 1, Finding 2), so this stopped being a theoretical edge case: a clock
+/// that jumps backward, or a hand-edited/corrupted UserDefaults value, used to self-heal on
+/// the next relaunch when the dictionary was in-memory only — persistence made a bad
+/// timestamp durable. `elapsed < 0` means `lastSeen` is after `now`, which is never a
+/// legitimate check-in.
 func browserButtonStatus(lastSeen: Date?, now: Date,
                          freshness: TimeInterval = 60 * 60 * 24 * 14) -> PermissionStatus {
-    guard let lastSeen, now.timeIntervalSince(lastSeen) < freshness else { return .notDetermined }
+    guard let lastSeen else { return .notDetermined }
+    let elapsed = now.timeIntervalSince(lastSeen)
+    guard elapsed >= 0, elapsed < freshness else { return .notDetermined }
     return .granted
 }
 

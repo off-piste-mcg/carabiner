@@ -339,3 +339,45 @@ extension PermissionModelsTests {
         XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: EIO), .notDetermined)
     }
 }
+
+// MARK: - Review fix round 2
+
+extension PermissionModelsTests {
+    // MARK: Finding 1 — the round-1 tests only reached the PURE helper
+    // (`mostRecentBrowserCheckIn`), never `LivePermissionChecker.status(for: .browserButton)`
+    // itself. Proven by the reviewer: reverting the call site back to the original bug
+    // (`lastSeen()[browser.rawValue]` with the hardcoded `.chrome`) left all 199 tests
+    // green — the helper just became dead code, no failure, no warning. This goes through
+    // the real checker so a revert of THAT wiring, not just the helper, is caught. See
+    // task-11-report.md for the mutation test that confirms this actually has teeth.
+
+    func testLivePermissionCheckerBrowserButtonGoesGreenFromASafariOnlyCheckIn() {
+        // .chrome configured (as MenuBarController hardcodes today), but ONLY Safari has
+        // checked in — the exact shape of the original bug: a checker keyed to the single
+        // configured browser would see nothing here and report notDetermined forever.
+        let checker = LivePermissionChecker(browser: .chrome, lastSeen: { ["safari": Date()] })
+        let completed = expectation(description: "status(for: .browserButton) completes")
+        var result: PermissionStatus?
+        checker.status(for: .browserButton) { status in
+            result = status
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        XCTAssertEqual(result, .granted)
+    }
+
+    // MARK: Finding 4 — a future-dated lastSeen must not read as fresh forever.
+
+    func testBrowserButtonFutureTimestampIsNotGreen() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now.addingTimeInterval(3600), now: now),
+                       .notDetermined)
+    }
+
+    /// The instant of the check-in itself (elapsed == 0) is still legitimately fresh — the
+    /// fix must reject the FUTURE, not merely stop treating "now" as fresh.
+    func testBrowserButtonExactlyNowIsStillGreen() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+    }
+}

@@ -99,28 +99,53 @@ final class GrabServerTests: XCTestCase {
         XCTAssertLessThan(GrabServer.pausedDeadline(), .infinity, "the backstop armed above must itself be finite")
     }
 
-    // MARK: - lastSeen persistence (review fix round 1, Finding 2)
+    // MARK: - lastSeen persistence (review fix round 2, Finding 2)
     //
-    // GrabServer's own load/persist helpers are private, and instantiating GrabServer needs
-    // a live MenuBarController + socket — neither is reachable from here (see the file's
-    // top comment). This pins the one assumption the fix actually depends on: a
-    // `[String: Date]` dictionary survives a genuine UserDefaults round trip, which is the
-    // entire mechanism `loadLastSeen`/`recordLastSeen` are built on.
+    // Round 1's two tests here exercised Foundation's dictionary round-trip against a
+    // throwaway key, not GrabServer's own `loadLastSeen`/`recordLastSeen` (both private,
+    // hardcoded to `.standard`) — they would have passed unchanged if those functions were
+    // deleted outright. `loadLastSeen(from:)`/`persistLastSeen(to:)` now take an injected
+    // `UserDefaults`, so these replace the two theatre tests with ones that call the real
+    // functions against a disposable suite.
 
-    func testStringDateDictionaryRoundTripsThroughUserDefaults() {
-        let key = "carabinerTests.lastSeenRoundTrip"
-        defer { UserDefaults.standard.removeObject(forKey: key) }
-        let now = Date()
-        let original: [String: Date] = ["chrome": now, "safari": now.addingTimeInterval(-120)]
-        UserDefaults.standard.set(original, forKey: key)
-        let loaded = UserDefaults.standard.dictionary(forKey: key) as? [String: Date]
-        XCTAssertEqual(loaded, original)
+    /// A fresh, isolated `UserDefaults` per test — `removePersistentDomain` in the teardown
+    /// means one test's writes can never leak into another's, and never touch `.standard`
+    /// (the real app's key) at all.
+    private func makeTestDefaults() -> UserDefaults {
+        let suite = "carabinerTests.lastSeen.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return defaults
     }
 
-    /// A key that was never written must come back empty, not crash or produce garbage —
-    /// this is the exact shape `loadLastSeen`'s `?? [:]` fallback covers on first launch.
-    func testMissingKeyRoundTripsToNil() {
-        let key = "carabinerTests.lastSeenNeverWritten"
-        XCTAssertNil(UserDefaults.standard.dictionary(forKey: key))
+    func testLoadLastSeenRoundTripsAGenuineWrite() {
+        let defaults = makeTestDefaults()
+        let now = Date()
+        let original: [String: Date] = ["chrome": now, "safari": now.addingTimeInterval(-120)]
+        GrabServer.persistLastSeen(original, to: defaults)
+        XCTAssertEqual(GrabServer.loadLastSeen(from: defaults), original)
+    }
+
+    func testLoadLastSeenOnAnUntouchedSuiteIsEmpty() {
+        XCTAssertEqual(GrabServer.loadLastSeen(from: makeTestDefaults()), [:])
+    }
+
+    /// Not a dictionary at all (a String written by something else, or a future version
+    /// that changes the schema) must round-trip to empty, not crash. `dictionary(forKey:)`
+    /// itself already returns `nil` for this — pinned here as a property of `loadLastSeen`,
+    /// not left as an unstated implementation detail of the Foundation call underneath it.
+    func testLoadLastSeenOnAGarbageNonDictionaryValueIsEmpty() {
+        let defaults = makeTestDefaults()
+        defaults.set("not a dictionary", forKey: GrabServer.lastSeenDefaultsKey)
+        XCTAssertEqual(GrabServer.loadLastSeen(from: defaults), [:])
+    }
+
+    /// A dictionary whose values aren't all `Date` (partial corruption, or a future version
+    /// storing something else under the same key) must also come back empty — a
+    /// partially-trustworthy result is not something a caller can safely use.
+    func testLoadLastSeenOnADictionaryWithANonDateValueIsEmpty() {
+        let defaults = makeTestDefaults()
+        defaults.set(["chrome": "not a date", "safari": Date()], forKey: GrabServer.lastSeenDefaultsKey)
+        XCTAssertEqual(GrabServer.loadLastSeen(from: defaults), [:])
     }
 }

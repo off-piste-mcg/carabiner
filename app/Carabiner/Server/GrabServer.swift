@@ -122,12 +122,42 @@ final class GrabServer {
     /// quit/update/crash no matter how recently a real request landed. Loaded once at
     /// init, written back after every update via `recordLastSeen`. UserDefaults matches the
     /// app's one existing use of it (`OnboardingWindowController.shownDefaultsKey`).
-    private(set) var lastSeen: [String: Date] = GrabServer.loadLastSeen()
+    private(set) var lastSeen: [String: Date] = GrabServer.loadLastSeen(from: .standard)
 
-    private static let lastSeenDefaultsKey = "grabServerLastSeen"
+    /// Not `private` (review fix round 2, Finding 2): `loadLastSeen(from:)`/
+    /// `persistLastSeen(to:)` below take an injected `UserDefaults` specifically so a test
+    /// can drive them through a disposable suite using the SAME key this type reads and
+    /// writes in the app — narrower access would force the key to be duplicated as a
+    /// string literal in the test, which is exactly the kind of drift a real regression
+    /// test should not depend on. `internal` (default) is as narrow as that allows; nothing
+    /// outside `@testable import` sees it.
+    static let lastSeenDefaultsKey = "grabServerLastSeen"
 
-    private static func loadLastSeen() -> [String: Date] {
-        (UserDefaults.standard.dictionary(forKey: lastSeenDefaultsKey) as? [String: Date]) ?? [:]
+    /// Loads the persisted check-ins from whichever `UserDefaults` is handed in — `.standard`
+    /// in the app, a disposable `UserDefaults(suiteName:)` in a test. Round 1's tests for
+    /// this exercised Foundation's dictionary round-trip against a throwaway key rather than
+    /// this function (review fix round 2, Finding 2: they would have passed unchanged if
+    /// `loadLastSeen`/`persistLastSeen` were deleted outright), which is why this needed to
+    /// become injectable rather than hardcoded to `.standard`.
+    ///
+    /// Garbage at the key round-trips to empty rather than crashing or returning a partial
+    /// result: `dictionary(forKey:)` already returns `nil` for a non-dictionary value (a
+    /// String, an Array — anything that isn't an `NSDictionary`), and the loop below refuses
+    /// the whole result rather than silently dropping just the bad entries if any value
+    /// isn't actually a `Date` — a partially-corrupted dictionary is not more trustworthy
+    /// than an absent one.
+    static func loadLastSeen(from defaults: UserDefaults) -> [String: Date] {
+        guard let raw = defaults.dictionary(forKey: lastSeenDefaultsKey) else { return [:] }
+        var result: [String: Date] = [:]
+        for (key, value) in raw {
+            guard let date = value as? Date else { return [:] }
+            result[key] = date
+        }
+        return result
+    }
+
+    static func persistLastSeen(_ lastSeen: [String: Date], to defaults: UserDefaults) {
+        defaults.set(lastSeen, forKey: lastSeenDefaultsKey)
     }
 
     /// The one place `lastSeen` is written — keeps the in-memory dictionary and its
@@ -135,7 +165,7 @@ final class GrabServer {
     /// above); both call sites already are.
     private func recordLastSeen(_ browser: String, at date: Date) {
         lastSeen[browser] = date
-        UserDefaults.standard.set(lastSeen, forKey: Self.lastSeenDefaultsKey)
+        Self.persistLastSeen(lastSeen, to: .standard)
     }
 
     init(port: UInt16 = 51847, controller: MenuBarController) {
@@ -383,8 +413,15 @@ final class GrabServer {
                                         url: "https://www.instagram.com/p/health/") else {
             return respond(c, status: 403, body: "forbidden")
         }
-        if let browser = request.query["browser"], !browser.isEmpty {
-            DispatchQueue.main.async { [weak self] in self?.recordLastSeen(browser, at: Date()) }
+        // Restricted to the `Browser` enum's finite case set, NOT the caller's raw string
+        // (review fix round 2, Finding 3 — `/grab` was fixed for exactly this in round 1's
+        // review and `/health` was missed). An unrecognised or garbage value now falls back
+        // to `.chrome`, matching `/grab`'s existing fallback, rather than growing the
+        // persisted dictionary (round 1, Finding 2 made this durable across launches) by
+        // one entry per distinct nonsense string a caller sends.
+        if let raw = request.query["browser"], !raw.isEmpty {
+            let browser = Browser(rawValue: raw) ?? .chrome
+            DispatchQueue.main.async { [weak self] in self?.recordLastSeen(browser.rawValue, at: Date()) }
         }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         // `checkOrigin(request.origin)`, not `request.origin` (fix round 2, Finding 2 —
