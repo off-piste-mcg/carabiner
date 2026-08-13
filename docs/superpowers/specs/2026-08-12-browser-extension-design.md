@@ -277,12 +277,35 @@ it.
      testing: the worker holds the streaming connection for the whole grab, so a long
      carousel must keep it alive. An in-flight `fetch` does reset the idle timer, but this
      is worth re-checking against a genuinely long grab before trusting it.
-2. **Safari cookies may need Full Disk Access.** `--cookies-from-browser safari` reads
-   `~/Library/Containers/com.apple.Safari/…/Cookies.binarycookies`, which is TCC-protected.
-   If Carabiner needs FDA to read it, that is another onboarding row and a materially
-   worse first run for half the team. Mitigation if confirmed: pass `browser=` from the
-   click, and on a Safari cookie-read failure retry once against Chrome's cookies before
-   surfacing an error. **Verify on a machine that has never granted it.**
+2. ~~**Safari cookies may need Full Disk Access.**~~ **CONFIRMED 2026-08-13 — they do.
+   Safari users cannot download anything until it is granted.** Measured on this machine,
+   Safari quit so its cookie file was flushed:
+
+   ```
+   carabiner -b safari -s 1 'https://www.instagram.com/p/<code>/'
+   ERROR: [Errno 1] Operation not permitted:
+     '~/Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies'
+   ✗ download failed.
+   ```
+
+   The control matters as much as the result: **the same URL and the same command with
+   `-b chrome` downloaded the file successfully**, so this is specifically macOS denying
+   the Safari cookie read, not a bad post, a bad URL, or a broken engine.
+
+   Consequences, all now certain rather than contingent:
+   - The onboarding window gains a **Full Disk Access** row. It is not optional and not
+     conditional — without it the button is decorative for every Safari user.
+   - That row can neither grant nor even *prompt*: macOS provides no API for either.
+     It can only detect (attempt the read), explain, and deep-link to
+     `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`.
+     Detection by attempting the read is what keeps it honest — the row goes green only
+     when the read actually succeeds.
+   - **Fallback:** on a Safari cookie-read failure, retry once against Chrome's cookies
+     before surfacing an error. The control above proves this path works. It turns a hard
+     failure into a silent success for anyone signed into Instagram in both browsers,
+     which is most of the team.
+   - The error text the user sees must name Full Disk Access. `Operation not permitted`
+     on a path nobody recognises is not a diagnosis.
 
    **Requirement (stated by Wisse, 2026-08-12): whatever permissions this turns out to
    need, they are granted from the Setup & Permissions window like every other one — an
