@@ -34,6 +34,18 @@ final class GrabServer {
     /// Finding 2). Ten minutes is far beyond any real grab (gotcha #21: a full re-encode
     /// is ~12s; a carousel is a handful of those) but still finite, so a truly stuck
     /// child process eventually loses its fd instead of holding it forever.
+    ///
+    /// This bound governs only the machine-driven stages — probe, download, item,
+    /// convert. It deliberately does NOT govern the carousel dialog (corrected in fix
+    /// round 1; the original version of this comment implied it did, which was wrong).
+    /// `::progress:prompt` blocks on a HUMAN answering an `osascript` dialog, with no
+    /// upper bound at all — a user can open a carousel, click the button, and walk away
+    /// for lunch. Counting that time against this deadline would cancel the connection
+    /// mid-dialog with no terminal `result` line while the grab itself goes on, behind
+    /// the scenes, to succeed: the extension's stream would die silently while the app's
+    /// own banner correctly reports success. `stream`'s observer pauses this deadline
+    /// entirely for the duration of the prompt and only re-arms it once a real,
+    /// machine-driven event follows — see `deadlineAction(for:paused:)`.
     private static let streamingTimeout: TimeInterval = 600
 
     /// Pure: which deadline applies to a connection, given whether it has become a
@@ -43,6 +55,26 @@ final class GrabServer {
     /// class of behaviour is verified by requests completing normally, not in isolation).
     static func deadline(forStreamingGrab streaming: Bool) -> TimeInterval {
         streaming ? streamingTimeout : connectionTimeout
+    }
+
+    /// What, if anything, should happen to a streaming connection's deadline in response
+    /// to the next progress event. Pure — the actual cancelling/rearming of a live
+    /// `NWConnection`'s timer lives in `stream`'s observer closure; this is only the
+    /// decision it acts on. `paused` is the caller's current belief about whether the
+    /// deadline is armed right now (`stream` tracks this as local state, since it is the
+    /// one place that owns the sequence of events for a given grab).
+    enum DeadlineAction: Equatable { case pause, resume, none }
+
+    static func deadlineAction(for event: ProgressEvent, paused: Bool) -> DeadlineAction {
+        switch event {
+        // `.prompt` can in principle repeat (defensive, not expected from the engine
+        // today) — already paused means there is nothing further to pause.
+        case .prompt: return paused ? .none : .pause
+        // Any OTHER event arriving while paused means the human answered the dialog and
+        // the engine is back to machine-driven work — resume the clock. While not
+        // paused, no other event changes anything.
+        default: return paused ? .resume : .none
+        }
     }
 
     // `state` and `lastSeen` are both confined to the MAIN queue — the discipline picked
@@ -99,32 +131,46 @@ final class GrabServer {
         // connections; now it can only block itself.
         let connQueue = DispatchQueue(label: "com.offpiste.carabiner.server.connection")
         connection.start(queue: connQueue)
+
         // A deadline, not a read timeout: simpler to reason about (one timer per
         // connection, cancelled implicitly by the connection itself finishing — cancel()
         // on an already-cancelled NWConnection is a documented no-op) and sufficient,
-        // since a legitimate request completes in well under this window. Built as a
-        // cancellable `DispatchWorkItem` (rather than a bare closure) so `extendDeadline`
-        // below can call it off before it fires.
-        let initialDeadline = DispatchWorkItem { connection.cancel() }
-        connQueue.asyncAfter(deadline: .now() + Self.deadline(forStreamingGrab: false), execute: initialDeadline)
-        // Handed all the way down to `grab(_:on:extendDeadline:)`. Called exactly once,
-        // and only for a `/grab` that clears `GrabGate` and wins the busy check — every
-        // other outcome (malformed request, 404, 403, 409, `/health`) leaves
-        // `initialDeadline` ticking untouched, which is what still protects the listener
-        // against a client that stalls or never finishes sending a body. Rearms rather
-        // than just cancelling: see `streamingTimeout`'s doc comment for why an unbounded
-        // connection isn't the right replacement.
-        let extendForStreaming: () -> Void = {
-            initialDeadline.cancel()
-            let extended = DispatchWorkItem { connection.cancel() }
-            connQueue.asyncAfter(deadline: .now() + Self.deadline(forStreamingGrab: true), execute: extended)
+        // since a legitimate request completes in well under this window.
+        //
+        // Boxed in a class, not a local `let`, because this connection's deadline is
+        // re-armed repeatedly over its life — 5s at accept, extended to 600s once a real
+        // grab starts streaming, then paused/resumed around the carousel dialog (Finding
+        // 2, fix round 1) — and every one of those needs to cancel whichever
+        // `DispatchWorkItem` is *actually* pending right now, not a stale reference to
+        // whichever one was scheduled first.
+        final class PendingDeadline { var workItem: DispatchWorkItem? }
+        let pendingDeadline = PendingDeadline()
+        func arm(_ interval: TimeInterval) {
+            pendingDeadline.workItem?.cancel()
+            let work = DispatchWorkItem { connection.cancel() }
+            pendingDeadline.workItem = work
+            connQueue.asyncAfter(deadline: .now() + interval, execute: work)
         }
-        receiveRequest(connection, buffer: Data(), extendDeadline: extendForStreaming)
+        arm(Self.deadline(forStreamingGrab: false))
+
+        // Both handed all the way down to `grab(_:on:extendDeadline:pauseDeadline:)`.
+        // `extendDeadline` is called exactly once for the initial 5s→600s transition, and
+        // again as the "resume" half of the prompt pause/resume cycle — both are the same
+        // operation, "arm the long deadline". `pauseDeadline` is called only around
+        // `::progress:prompt`. Every other outcome (malformed request, 404, 403, 409,
+        // `/health`, a `/grab` that never streams) leaves the original 5s deadline ticking
+        // untouched, which is what still protects the listener against a client that
+        // stalls or never finishes sending a body.
+        let extendForStreaming: () -> Void = { arm(Self.deadline(forStreamingGrab: true)) }
+        let pauseForPrompt: () -> Void = { pendingDeadline.workItem?.cancel(); pendingDeadline.workItem = nil }
+
+        receiveRequest(connection, buffer: Data(), extendDeadline: extendForStreaming, pauseDeadline: pauseForPrompt)
     }
 
     /// Reads until headers are complete and the declared body has arrived. Requests here
     /// are a few hundred bytes; anything over 64 KB is refused rather than buffered.
-    private func receiveRequest(_ c: NWConnection, buffer: Data, extendDeadline: @escaping () -> Void) {
+    private func receiveRequest(_ c: NWConnection, buffer: Data,
+                                extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
         c.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             var buf = buffer
@@ -135,23 +181,25 @@ final class GrabServer {
             }
             switch HTTPRequest.parse(buf) {
             case .complete(let request):
-                self.route(request, on: c, extendDeadline: extendDeadline)
+                self.route(request, on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
             case .malformed(let reason):
                 // A garbled Content-Length (Finding, minor) would otherwise sit waiting
                 // for bytes that can never satisfy it until the connection deadline fires
                 // — respond now instead of guessing at a byte count.
                 self.respond(c, status: 400, body: reason)
             case .incomplete:
-                if isComplete { c.cancel() } else { self.receiveRequest(c, buffer: buf, extendDeadline: extendDeadline) }
+                if isComplete { c.cancel() }
+                else { self.receiveRequest(c, buffer: buf, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline) }
             }
         }
     }
 
-    private func route(_ request: HTTPRequest, on c: NWConnection, extendDeadline: @escaping () -> Void) {
+    private func route(_ request: HTTPRequest, on c: NWConnection,
+                       extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
         if request.method == "OPTIONS" { return preflight(request, on: c) }
         switch request.path {
         case "/health": health(request, on: c)
-        case "/grab": grab(request, on: c, extendDeadline: extendDeadline)
+        case "/grab": grab(request, on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
         default: respond(c, status: 404, body: "no such route")
         }
     }
@@ -160,7 +208,8 @@ final class GrabServer {
     /// Refuses rather than queues a second concurrent grab (409): a queue would let a
     /// stray double-click stack grabs the user can no longer see or cancel, and the app
     /// has exactly one status-item ring and one working banner to represent "busy" with.
-    private func grab(_ request: HTTPRequest, on c: NWConnection, extendDeadline: @escaping () -> Void) {
+    private func grab(_ request: HTTPRequest, on c: NWConnection,
+                      extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
         guard request.method == "POST" else { return respond(c, status: 404, body: "POST only") }
         let payload = (try? JSONSerialization.jsonObject(with: Data(request.body.utf8))) as? [String: Any]
         switch GrabGate.check(origin: request.origin, url: payload?["url"] as? String) {
@@ -178,19 +227,37 @@ final class GrabServer {
             respond(c, status: status, origin: GrabGate.checkOrigin(request.origin), body: reason)
         case .ok(let url):
             let browser = Browser(rawValue: (payload?["browser"] as? String) ?? "") ?? .chrome
-            if let name = payload?["browser"] as? String {
-                DispatchQueue.main.async { [weak self] in self?.lastSeen[name] = Date() }
-            }
+            // Keyed off the validated `Browser` enum's rawValue, NOT the caller's raw
+            // string (Finding 1, fix round 1). The equivalent value on `/health` is
+            // control-character-stripped by `HTTPRequest.parse` specifically because
+            // task 11's onboarding UI renders `lastSeen`'s keys directly — this path
+            // skipped that mitigation and took the caller's string as-is, so
+            // `{"browser":"chrome\r\n..."}` (or a fresh random string every request)
+            // would land in `lastSeen` unsanitized and let the dictionary grow without
+            // bound. Restricting to `Browser`'s finite case set fixes both problems in
+            // one move: an unrecognised name already falls back to `.chrome` for
+            // cookie purposes two lines up, so recording presence under that same
+            // fallback is consistent, not a new behaviour.
+            DispatchQueue.main.async { [weak self] in self?.lastSeen[browser.rawValue] = Date() }
+            // Resolved once, here — a plain value, not a closure re-run per echo site —
+            // and reused for every `Access-Control-Allow-Origin` below (500, 409, and
+            // `stream`'s headers). Finding 3, fix round 1: those three sites used to
+            // pass `request.origin` directly, which is safe only because
+            // `GrabGate.check(...) == .ok` implies `checkOrigin(request.origin) != nil`
+            // — true today, but a non-local invariant a reader has to go verify instead
+            // of seeing it hold on the line itself. Passing the re-validated value
+            // everywhere makes each site self-evidently safe.
+            let validOrigin = GrabGate.checkOrigin(request.origin)
             DispatchQueue.main.async { [weak self] in
                 guard let self, let controller = self.controller else {
-                    self?.respond(c, status: 500, origin: request.origin, body: "no controller"); return
+                    self?.respond(c, status: 500, origin: validOrigin, body: "no controller"); return
                 }
                 guard !controller.isBusy else {
-                    self.respond(c, status: 409, origin: request.origin, body: "a grab is already running")
+                    self.respond(c, status: 409, origin: validOrigin, body: "a grab is already running")
                     return
                 }
-                self.stream(url: url, browser: browser, controller: controller,
-                            origin: request.origin, on: c, extendDeadline: extendDeadline)
+                self.stream(url: url, browser: browser, controller: controller, origin: validOrigin,
+                            on: c, extendDeadline: extendDeadline, pauseDeadline: pauseDeadline)
             }
         }
     }
@@ -199,7 +266,8 @@ final class GrabServer {
     /// result. The connection stays open for the whole grab — that open connection IS
     /// the progress channel.
     private func stream(url: String, browser: Browser, controller: MenuBarController,
-                        origin: String?, on c: NWConnection, extendDeadline: () -> Void) {
+                        origin: String?, on c: NWConnection,
+                        extendDeadline: @escaping () -> Void, pauseDeadline: @escaping () -> Void) {
         // Past this point the connection is a legitimate, running grab — trade the short
         // request-response deadline for the long streaming one before doing anything else,
         // so nothing between here and the first byte of the response can race the old timer.
@@ -213,13 +281,32 @@ final class GrabServer {
         let write: (String) -> Void = { line in
             c.send(content: Data(line.utf8), completion: .contentProcessed { _ in })
         }
+        // Local to this one grab's event sequence — `stream` is the one place that sees
+        // every event in order, so it's the natural owner of "is the deadline currently
+        // paused". Fed into the pure `deadlineAction` decision (Finding 2, fix round 1)
+        // rather than re-deriving it inline, so the actual pause/resume logic has exactly
+        // one implementation and it's the tested one.
+        var deadlinePaused = false
+        let observer: (ProgressEvent) -> Void = { event in
+            switch Self.deadlineAction(for: event, paused: deadlinePaused) {
+            case .pause:
+                deadlinePaused = true
+                pauseDeadline()
+            case .resume:
+                deadlinePaused = false
+                extendDeadline()
+            case .none:
+                break
+            }
+            write(GrabEvent.line(for: event))
+        }
         // The app still posts its own banner: it is what reports the filename and the
         // @user. The in-page ring is additional feedback, not a replacement.
         controller.notifyGrabStarted()
         controller.grab(
             url: url,
             browser: browser,
-            observer: { event in write(GrabEvent.line(for: event)) },
+            observer: observer,
             userObserver: { user in write(GrabEvent.line(forUser: user)) },
             completion: { result in
                 // NOT `write(...); c.cancel()` (the brief's snippet, and this task's
