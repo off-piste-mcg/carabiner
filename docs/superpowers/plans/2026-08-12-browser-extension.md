@@ -1279,7 +1279,21 @@ scan();
 
 - [ ] **Step 2: Make the manifest load the content script as a module**
 
-ES module imports do not work in a classic content script. Change the manifest's `content_scripts` entry to inject a loader, and add the real script to web-accessible resources:
+> **⚠️ THIS STEP IS WRONG AND WAS SUPERSEDED DURING IMPLEMENTATION (2026-08-13). Do not
+> follow it.** A `<script>` element inserted into the DOM — even by a content script — is
+> always evaluated in the page's **main world**, where `chrome.*` does not exist. Since
+> `content.js` registers `chrome.runtime.onMessage` at top level, this design throws
+> `ReferenceError: chrome is not defined` before `scan()` ever runs, and **no button ever
+> appears, on any page, with no visible error.** The shipped design keeps `content.js` as
+> an ordinary content script (isolated world intact) and uses **dynamic `import()`** of
+> `chrome.runtime.getURL(...)` for its ES-module dependencies, which is Chrome's
+> documented mechanism for exactly this. `loader.js` does not exist. Read
+> `extension/src/content.js`, not this step.
+>
+> Kept rather than deleted because "inject a `<script type=module>` from the content
+> script" is the answer most sources give, so it will be proposed again.
+
+The superseded text follows. Only `web_accessible_resources` survives, and its contents differ:
 
 ```json
   "content_scripts": [
