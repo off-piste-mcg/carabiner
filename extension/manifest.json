@@ -3,17 +3,23 @@
   "name": "Carabiner",
   "version": "0.1.0",
   "description": "Download the Instagram post you're looking at, cleanly, with Carabiner.",
-  "permissions": ["scripting"],
+  "permissions": ["scripting", "tabs"],
   "host_permissions": [
     "*://*.instagram.com/*",
     "http://127.0.0.1:51847/*"
   ],
-  "background": { "service_worker": "src/worker.js", "type": "module" },
+  "background": { "service_worker": "src/worker.js" },
   "content_scripts": [
     {
       "matches": ["*://*.instagram.com/*"],
       "js": ["src/content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/shortcode.js", "src/ring.js"],
+      "matches": ["*://*.instagram.com/*"]
     }
   ]
 }

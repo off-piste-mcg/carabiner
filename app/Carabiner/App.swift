@@ -37,4 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.showOnboarding()
         }
     }
+
+    /// The extension opens `carabiner://launch` purely to start the app when it isn't
+    /// running; the real request then arrives over HTTP. There is nothing to do here —
+    /// being launched IS the effect.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        NSLog("Carabiner: launched via URL scheme (%@)", urls.first?.absoluteString ?? "?")
+    }
 }

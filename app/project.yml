@@ -135,6 +135,13 @@ targets:
         NSAppleEventsUsageDescription: "Carabiner reads your active browser tab's URL so it can grab the media you're viewing."
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # The browser extension's background worker opens carabiner://launch purely to
+        # start the app when it finds it isn't already listening on the HTTP port — the
+        # real grab request goes over HTTP once the app is up. See App.swift's
+        # application(_:open:) and extension/src/worker.js's launchApp().
+        CFBundleURLTypes:
+          - CFBundleURLName: com.offpiste.carabiner
+            CFBundleURLSchemes: [carabiner]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner
