@@ -3,6 +3,9 @@
   "name": "Carabiner",
   "version": "0.1.0",
   "description": "Download the Instagram post you're looking at, cleanly, with Carabiner.",
+  "icons": {
+    "128": "icons/icon128.png"
+  },
   "permissions": ["scripting", "tabs"],
   "host_permissions": [
     "*://*.instagram.com/*",

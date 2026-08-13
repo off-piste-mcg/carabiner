@@ -7,6 +7,13 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 2.0.0
+# Project-wide, so the app and its embedded appex always ship the same version without
+# bumping it in two places — Xcode warns (and App Store validation would reject) an
+# appex whose CFBundleVersion doesn't match its parent app's.
+settings:
+  base:
+    MARKETING_VERSION: "0.1.2"
+    CURRENT_PROJECT_VERSION: "3"
 targets:
   Carabiner:
     type: application
@@ -29,6 +36,8 @@ targets:
         type: folder
     dependencies:
       - package: KeyboardShortcuts
+      - target: CarabinerSafariExtension
+        embed: true
     # Order matters here, and it is not the obvious one. Both scripts run before Xcode's
     # own CodeSign step, but the xattr strip must be LAST — see its comment.
     postBuildScripts:
@@ -200,6 +209,64 @@ targets:
           # exportArchive, which strips it during export; this setting reaches the same
           # place without the ExportOptions.plist machinery. Our real entitlements still
           # apply — they come from CODE_SIGN_ENTITLEMENTS, which this does not touch.
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+  CarabinerSafariExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - CarabinerSafariExtension
+      # The extension source, populated by extension/build.sh, which allowlist-copies
+      # only manifest.json, src/ and icons/ into dist/chrome — node_modules/ and test/
+      # are never touched, so there is no exclude pattern to keep in sync as the
+      # extension grows. Referenced as three entries rather than one folder reference
+      # wrapping dist/chrome itself: a folder reference copies under its OWN name (the
+      # same reasoning that puts .deps/bin's contents at Resources/bin/ above), which
+      # here would bury manifest.json at Resources/chrome/manifest.json instead of at
+      # the resource root Safari requires it at. src/ and icons/ still want to be real
+      # folder references, both because manifest.json's own relative paths ("src/...",
+      # "icons/...") expect them as literal subdirectories and to keep this from turning
+      # into a per-file list that silently goes stale as the extension grows.
+      - path: ../extension/dist/chrome/manifest.json
+        buildPhase: resources
+      - path: ../extension/dist/chrome/src
+        buildPhase: resources
+        type: folder
+      - path: ../extension/dist/chrome/icons
+        buildPhase: resources
+        type: folder
+    # Like Carabiner/Info.plist (see app/.gitignore), this is a build product xcodegen
+    # writes fresh from `properties` on every `generate` — a hand-authored file at this
+    # path is silently overwritten with xcodegen's bare default template (no NSExtension
+    # key), which is a real trap: the appex builds and embeds fine, and only fails at
+    # Safari's own load step. The NSExtension dict has to live here, not in a checked-in
+    # plist file.
+    info:
+      path: CarabinerSafariExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Carabiner
+        # Xcode's default template hardcodes "1.0"/"1" here, which xcodegen reproduces
+        # verbatim — and Xcode then warns at build time that the appex's CFBundleVersion
+        # must match its parent app's. Point both at the same project-level values the
+        # Carabiner target uses so an app version bump doesn't have to be made twice.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner.SafariExtension
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: NO
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          DEVELOPMENT_TEAM: ${CARABINER_RELEASE_TEAM_ID}
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
           CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
   CarabinerTests:
     type: bundle.unit-test
