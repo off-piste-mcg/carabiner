@@ -6,7 +6,7 @@
   "icons": {
     "128": "icons/icon128.png"
   },
-  "permissions": ["scripting", "tabs"],
+  "permissions": ["tabs"],
   "host_permissions": [
     "*://*.instagram.com/*",
     "http://127.0.0.1:51847/*"
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["*://*.instagram.com/*"],
-      "js": ["src/content.js"],
+      "js": ["src/browser.js", "src/content.js"],
       "run_at": "document_idle"
     }
   ],

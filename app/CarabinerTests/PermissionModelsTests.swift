@@ -381,3 +381,85 @@ extension PermissionModelsTests {
         XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
     }
 }
+
+// MARK: - Final review, Finding 2 — nothing read GrabServer.state, so a port collision
+// (or a local squatter winning the bind) presented as a button that silently did nothing,
+// contradicting the design doc's own claim that it "surfaces the failure in the
+// onboarding row". `browserButtonStatus` now takes the server's own state and answers
+// `.serverUnavailable` before it even looks at `lastSeen` — a stale-but-fresh check-in
+// from before the port was lost must not paper over a server that cannot accept new
+// connections right now.
+
+extension PermissionModelsTests {
+    func testBrowserButtonReportsServerUnavailableWhenTheListenerFailed() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now, serverState: .failed("Address already in use")),
+                       .serverUnavailable("Address already in use"))
+    }
+
+    /// The failure must win even over a check-in that would otherwise read as granted —
+    /// the whole point is that a check-in from BEFORE the port was lost is not proof the
+    /// extension can reach the app right now.
+    func testServerFailureOverridesAnOtherwiseFreshCheckIn() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now, serverState: .failed("in use")),
+                       .serverUnavailable("in use"))
+    }
+
+    /// `.stopped` (the state before `start()` has run, or in a build that never starts the
+    /// listener) is not a FAILURE — it must fall through to the ordinary lastSeen logic
+    /// rather than being read as a problem worth flagging.
+    func testStoppedServerStateIsNotTreatedAsAFailure() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now, serverState: .stopped), .notDetermined)
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now, serverState: .stopped), .granted)
+    }
+
+    /// The default parameter (`.listening`) keeps every pre-existing call and test — none
+    /// of which knew this parameter existed — behaving exactly as before.
+    func testListeningIsTheDefaultServerState() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+    }
+
+    // MARK: presentation(for: .serverUnavailable) — no dead-end action
+
+    func testServerUnavailablePresentationOffersNoAction() {
+        let p = PermissionRow.browserButton.presentation(for: .serverUnavailable("Address already in use"))
+        XCTAssertNil(p.buttonTitle)
+        XCTAssertEqual(p.action, .none)
+        XCTAssertEqual(p.tick, .cross)
+        XCTAssertTrue(p.detail?.contains("Address already in use") ?? false, "got: \(p.detail ?? "nil")")
+    }
+
+    // MARK: toggleAction / intent — .serverUnavailable can never be requested or deep-linked
+
+    func testToggleActionOnServerUnavailableIsAlwaysNothing() {
+        XCTAssertEqual(toggleAction(desired: true, status: .serverUnavailable("x")), .nothing)
+        XCTAssertEqual(toggleAction(desired: false, status: .serverUnavailable("x")), .nothing)
+    }
+
+    func testBrowserButtonIntentOnServerUnavailableIsNothingNotADeadEndPrompt() {
+        // browserButton.canBePrompted is true, so without the toggleAction case above this
+        // would have fallen into `.request` — a switch the user could flip that does
+        // nothing, exactly the dead button this finding exists to remove.
+        XCTAssertEqual(PermissionRow.browserButton.intent(desired: true, status: .serverUnavailable("x")),
+                       .nothing)
+    }
+
+    // MARK: wired through the real checker (mirrors round 2 Finding 1's own mutation-test
+    // rationale just above: a revert of the CALL SITE, not just the pure helper, must fail)
+
+    func testLivePermissionCheckerBrowserButtonReportsServerUnavailable() {
+        let checker = LivePermissionChecker(browser: .chrome, lastSeen: { [:] },
+                                            serverState: { .failed("Address already in use") })
+        let completed = expectation(description: "status(for: .browserButton) completes")
+        var result: PermissionStatus?
+        checker.status(for: .browserButton) { status in
+            result = status
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        XCTAssertEqual(result, .serverUnavailable("Address already in use"))
+    }
+}

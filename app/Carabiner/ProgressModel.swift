@@ -19,6 +19,13 @@ enum ProgressEvent: Equatable {
     /// a download that has already started. `save` alone doesn't either: on the
     /// YouTube/Pinterest/generic branches it is the *first* marker (gotcha #23's scope
     /// note), and a ring born at 96% is a completion flourish, not download feedback.
+    ///
+    /// `extension/src/ring.js`'s `ringFractionForProgress` mirrors this exact
+    /// classification for the in-page button's own ring (`.download`/`.item`/`.convert`
+    /// advance it, `.probe`/`.prompt`/`.save` do not) — final review, Finding 4: it used
+    /// to group `save` with `convert` and jump straight to 100%, silently disagreeing with
+    /// this list despite that file's header claiming the two are kept in sync. If this
+    /// list ever changes, check that file's `switch` still matches case-for-case.
     var beginsActivity: Bool {
         switch self {
         case .download, .item, .convert: return true

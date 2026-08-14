@@ -423,4 +423,170 @@ final class GrabRunnerTests: XCTestCase {
         XCTAssertTrue(result.ok)
         XCTAssertNil(result.usedFallbackBrowser)
     }
+
+    // MARK: - watchdogPaused(after:previouslyPaused:) / watchdogHasExpired (pure, Finding 1)
+
+    func testPromptPausesFromUnpaused() {
+        XCTAssertTrue(watchdogPaused(after: .prompt, previouslyPaused: false))
+    }
+
+    func testPromptStaysPausedWhenAlreadyPaused() {
+        XCTAssertTrue(watchdogPaused(after: .prompt, previouslyPaused: true))
+    }
+
+    /// Every non-prompt event resumes the ordinary clock — the human answered the dialog,
+    /// whatever the engine reports next. Mirrors GrabServerTests'
+    /// testEveryNonPromptEventResumesWhenOnTheBackstop for the exact same reason: this
+    /// reuses that same decision function.
+    func testAnyOtherEventResumesFromPaused() {
+        let events: [ProgressEvent] = [.probe, .download(percent: 50), .item(index: 1, total: 3), .convert(.remux), .save]
+        for event in events {
+            XCTAssertFalse(watchdogPaused(after: event, previouslyPaused: true),
+                           "\(event) must resume the ordinary clock")
+        }
+    }
+
+    /// Raw stderr bytes that didn't parse as a marker (`nil`) are still activity, but they
+    /// must not themselves change the paused/unpaused regime — only a real `.prompt` or a
+    /// real non-prompt event does that.
+    func testRawOutputWithNoEventLeavesPausedStateUnchanged() {
+        XCTAssertFalse(watchdogPaused(after: nil, previouslyPaused: false))
+        XCTAssertTrue(watchdogPaused(after: nil, previouslyPaused: true))
+    }
+
+    func testHasExpiredUsesTheShortBoundWhenNotPaused() {
+        XCTAssertFalse(watchdogHasExpired(secondsSinceActivity: 9, paused: false, inactivityBound: 10, promptBound: 100))
+        XCTAssertTrue(watchdogHasExpired(secondsSinceActivity: 10, paused: false, inactivityBound: 10, promptBound: 100))
+    }
+
+    /// The exact property Finding 1 asks to be pinned: `.prompt` does not start the SHORT
+    /// clock. 9.5s of silence would have expired the ordinary 10s bound, but paused=true
+    /// selects the much longer prompt bound instead, so it must still read as alive.
+    func testHasExpiredUsesTheLongBoundWhenPaused() {
+        XCTAssertFalse(watchdogHasExpired(secondsSinceActivity: 9.5, paused: true, inactivityBound: 10, promptBound: 100))
+        XCTAssertTrue(watchdogHasExpired(secondsSinceActivity: 100, paused: true, inactivityBound: 10, promptBound: 100))
+    }
+
+    // MARK: - the watchdog wired end-to-end through run(url:) (Finding 1)
+    //
+    // Real Process, real timer, tiny (but not TOO tiny) bounds — the defaults are minutes
+    // (GrabServer's own battle-tested numbers, see the doc comment on
+    // watchdogInactivityBound) so these run fast without weakening what they prove. Every
+    // bound below is kept comfortably above two real sources of jitter: the watchdog's
+    // own fixed 0.25s poll interval (a bound smaller than that risks tripping on the
+    // FIRST tick before the child has even had a chance to produce its first byte), and
+    // real process-launch latency under load — `testPromptSuspendsTheShortBoundWhileWaitingOnTheDialog`
+    // measured flaky at 0.2s/0.5s when the full suite ran under load and passed every time
+    // in isolation; these margins are what fixed it, not a fluke worth re-tightening.
+
+    /// A stream of progress markers, each well inside the bound, must keep the grab alive
+    /// for a total duration that comfortably EXCEEDS the bound — proving this is an
+    /// inactivity clock that resets on each event, not a total-duration cap.
+    func testStreamOfProgressKeepsTheGrabAlive() {
+        let stub = writeStub("""
+        for i in 1 2 3 4 5; do
+          echo "::progress:download:  ${i}0.0%" 1>&2
+          sleep 0.15
+        done
+        echo '  ✓ ABC_fixed.mp4'
+        exit 0
+        """)
+        var runner = GrabRunner(executable: stub)
+        runner.watchdogInactivityBound = 0.6   // total run time (~0.75s) exceeds this
+        runner.watchdogPromptBound = 0.6
+        let result = runner.run(url: "https://x/y")
+        XCTAssertTrue(result.ok, "got: \(result.message)")
+    }
+
+    /// A child that goes completely silent (no markers, no output at all) past the
+    /// inactivity bound is killed and reported as a plain failure — not left to hang.
+    /// `wait(timeout:)` is generous, but the point of the assertion is that this returns
+    /// well before the 10s sleep finishes, not anywhere near that timeout — proving the
+    /// child was actually terminated, not merely outlasted.
+    func testSilentChildIsKilledAndReportedAsFailure() {
+        let stub = writeStub("sleep 10; echo '  ✓ should never be seen'; exit 0")
+        var runner = GrabRunner(executable: stub)
+        runner.watchdogInactivityBound = 0.6
+        runner.watchdogPromptBound = 0.6
+
+        let box = ResultBox()
+        let done = expectation(description: "watchdog kills the hung child")
+        let start = Date()
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.set(runner.run(url: "https://x/y"))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 8)
+
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5, "the watchdog should have killed the child well before the 10s sleep finished")
+        let result = box.get()
+        XCTAssertEqual(result?.ok, false)
+        XCTAssertEqual(result?.message, "Carabiner stopped responding and the grab was cancelled")
+    }
+
+    /// The exact scenario Finding 1 names: `.prompt` fires, then the child goes quiet for
+    /// LONGER than the ordinary inactivity bound but still well under the (generous, for
+    /// this test) prompt bound — a human reading the carousel dialog, not a stalled grab.
+    /// Proves `.prompt` swaps in the long bound rather than merely resetting the clock on
+    /// the short one (which a gap this long would still fail).
+    func testPromptSuspendsTheShortBoundWhileWaitingOnTheDialog() {
+        let stub = writeStub("""
+        echo '::progress:prompt' 1>&2
+        sleep 1.2
+        echo '  ✓ ABC_fixed.mp4'
+        exit 0
+        """)
+        var runner = GrabRunner(executable: stub)
+        runner.watchdogInactivityBound = 0.6   // the 1.2s prompt-wait alone would trip this
+        runner.watchdogPromptBound = 10.0      // ...but not this
+        let result = runner.run(url: "https://x/y")
+        XCTAssertTrue(result.ok, "got: \(result.message)")
+    }
+
+    /// The prompt bound is generous, not infinite: a child that hangs on/after the dialog
+    /// and never says anything else again still eventually loses its process, exactly as
+    /// GrabServer's own `pausedTimeout` backstop is finite (never `.infinity`) rather than
+    /// an unbounded pause.
+    func testPromptBackstopIsFiniteNotUnbounded() {
+        let stub = writeStub("""
+        echo '::progress:prompt' 1>&2
+        sleep 10
+        echo '  ✓ should never be seen'
+        exit 0
+        """)
+        var runner = GrabRunner(executable: stub)
+        runner.watchdogInactivityBound = 0.6
+        runner.watchdogPromptBound = 1.2
+
+        let box = ResultBox()
+        let done = expectation(description: "the prompt backstop still eventually fires")
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.set(runner.run(url: "https://x/y"))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 8)
+
+        XCTAssertEqual(box.get()?.ok, false)
+        XCTAssertEqual(box.get()?.message, "Carabiner stopped responding and the grab was cancelled")
+    }
+
+    /// A grab whose watchdog fired must not be mistaken for a cookie problem — it has its
+    /// own distinct message and `cookieReadFailure` defaults to false, so
+    /// `shouldRetryWithChrome` never fires a pointless Chrome retry against a child that
+    /// is already dead.
+    func testWatchdogFailureIsNeverTreatedAsACookieFailure() {
+        let stub = writeStub("sleep 10; exit 0")
+        var runner = GrabRunner(executable: stub, browser: .safari)
+        runner.watchdogInactivityBound = 0.6
+        runner.watchdogPromptBound = 0.6
+
+        let box = ResultBox()
+        let done = expectation(description: "watchdog result carries no cookie-failure flag")
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.set(runner.run(url: "https://x/y"))
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 8)
+        XCTAssertEqual(box.get()?.cookieReadFailure, false)
+    }
 }

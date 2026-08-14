@@ -155,10 +155,11 @@
     return host;
   }
 
-  function detectBrowser() {
-    return navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")
-      ? "safari" : "chrome";
-  }
+  // detectBrowser() lives in browser.js now, shared with worker.js (Finding 4, final
+  // review) — manifest.json lists it immediately before this file in the same
+  // content_scripts[].js array, so it's already a global by the time this IIFE runs. Not
+  // imported here: it has no `export` (see browser.js's own header for why), so a
+  // dynamic import() of it would resolve to an empty module namespace.
 
   // Every message from the worker carries the id of the grab it belongs to (fix round 1,
   // Finding 2) — routing and the watchdog itself both live in grabTracker.js now, so this

@@ -113,13 +113,21 @@ fixed port **51847**. Two routes, nothing else:
 
 | Route | Purpose |
 |---|---|
-| `GET /health` | Returns app version + build. Extension calls it on install and on each page load to prove the connection; the app records "last seen" per browser, which is what turns the onboarding row green. |
+| `GET /health` | Returns app version + build. Extension calls it on install and on browser/extension startup (`chrome.runtime.onInstalled` / `onStartup` — corrected, final review: as-built this is NOT "on each page load", which was this doc's original, never-implemented plan) to prove the connection; the app records "last seen" per browser, which is what turns the onboarding row green. |
 | `POST /grab` | Body `{url, browser, slide?}`. Streams NDJSON progress events, then a terminal result event. |
 
 The port is fixed rather than negotiated, because the extension has no other way to find
 it. If the bind fails because something else holds 51847, the app does **not** silently
 pick another port — it surfaces the failure in the onboarding row ("port in use"), since a
-silently-moved port would present as a button that does nothing.
+silently-moved port would present as a button that does nothing. **Checked true, final
+review, Finding 2:** this was written before anything actually read `GrabServer.state` —
+`state` sat `private(set)` with zero readers, so the claim was aspirational, not built,
+and doubled as a real exposure (a local process squatting on 51847 before Carabiner starts
+would win the bind silently and receive every permalink the extension POSTs). Now wired:
+`browserButtonStatus(lastSeen:now:serverState:)` (PermissionModels.swift) checks
+`GrabServer.state` before it even looks at `lastSeen`, and a `.failed` listener renders as
+a `.serverUnavailable` row — cross-tick, no "Allow" button, no System Settings deep-link,
+since neither can fix a port collision.
 
 **Why HTTP and not a custom URL scheme.** `carabiner://grab?url=…` was the first
 candidate and is simpler, but it has no return channel: the button could not show
@@ -205,9 +213,13 @@ newline-delimited JSON:
 
 The button ring mirrors the menu-bar ring's rule (gotcha: the ring means *downloading*):
 it stays idle until the first activity marker, so the carousel probe and the dialog show
-no ring. If the browser cannot read a streamed response body, the button falls back to an
-indeterminate spinner and waits for the terminal event — the feature degrades, it does
-not break.
+no ring. **Corrected, final review:** no streamed-body fallback exists — the original plan
+here was never built. As-built, `worker.js#run()` calls `response.body.getReader()`
+unconditionally; if that ever throws (a browser that can't stream a response body), the
+error propagates out of `run()` and is caught by the same `.catch` that handles every
+other failure in that function, which reports the grab as a plain error to the button. No
+indeterminate spinner exists anywhere in this codebase — an unreadable body degrades to
+the ordinary error state, not a distinct one.
 
 The app's own banners and menu-bar ring are unchanged and still fire. A click in the page
 produces in-page feedback *and* the usual notification; that is deliberate, since the
@@ -217,7 +229,11 @@ outcome banner is what reports the filename and the `@user`.
 
 v1 changes nothing: the engine probes and shows its own native dialog (gotchas #9, #15,
 #24 all continue to apply, untested code paths included). `::progress:prompt` reaches the
-button as a "waiting for you" state.
+button's owning `grabTracker` and suspends its client-side watchdog there (a human reading
+the dialog must not be flagged "interrupted"), but — **corrected, final review:** there is
+no distinct visual "waiting for you" state on the button itself. `ringFractionForProgress`
+treats `prompt` the same as `probe` (returns `null`, ring unmoved — see ring.js), so the
+button simply holds whatever it was already showing while the dialog is up.
 
 An in-page slide picker is *not* in v1. It would duplicate detection logic that gotcha #15
 records as subtle and twice-broken, in a second language, against markup that changes

@@ -5,8 +5,9 @@
 // browser and silently breaks loading in the other, this stays classic and pulls in its
 // one pure helper via importScripts — the traditional, broadly-supported way for a
 // classic worker to load another script. See ndjson.js's header for the other half of
-// this.
-importScripts("ndjson.js");
+// this. browser.js (detectBrowser) is loaded the same way, for the same reason — see its
+// own header for how content.js gets the identical function without a second copy.
+importScripts("ndjson.js", "browser.js");
 
 const ENDPOINT = "http://127.0.0.1:51847";
 
@@ -126,7 +127,5 @@ function relay(tabId, message) {
 chrome.runtime.onInstalled.addListener(ping);
 chrome.runtime.onStartup.addListener(ping);
 function ping() {
-  const browser = navigator.userAgent.includes("Safari") && !navigator.userAgent.includes("Chrome")
-    ? "safari" : "chrome";
-  fetch(`${ENDPOINT}/health?browser=${browser}`).catch(() => {});
+  fetch(`${ENDPOINT}/health?browser=${detectBrowser()}`).catch(() => {});
 }

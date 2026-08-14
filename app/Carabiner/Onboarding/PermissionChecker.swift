@@ -37,9 +37,18 @@ final class LivePermissionChecker: PermissionChecking {
     /// has to know this parameter exists.
     private let lastSeen: () -> [String: Date]
 
-    init(browser: Browser, lastSeen: @escaping () -> [String: Date] = { [:] }) {
+    /// The extension server's own bind outcome (Finding 2, final review) — read fresh on
+    /// every status check, same discipline as `lastSeen` and for the same reason: a server
+    /// that fails to bind AFTER this checker already exists must not keep reporting
+    /// whatever it last saw. Defaults to `.listening` (nothing wrong) so every existing
+    /// call site and test, none of which exercised this path, is unaffected.
+    private let serverState: () -> GrabServer.State
+
+    init(browser: Browser, lastSeen: @escaping () -> [String: Date] = { [:] },
+         serverState: @escaping () -> GrabServer.State = { .listening }) {
         self.browser = browser
         self.lastSeen = lastSeen
+        self.serverState = serverState
     }
 
     /// The exact read a Safari-cookie grab makes. Existence alone proves nothing (a denied
@@ -78,8 +87,11 @@ final class LivePermissionChecker: PermissionChecking {
         case .browserButton:
             // ANY known browser counts (Finding 1) — reading only the single browser
             // MenuBarController happens to have configured for cookies would silently
-            // orphan every other browser's check-ins, Safari's included.
-            let s = browserButtonStatus(lastSeen: mostRecentBrowserCheckIn(lastSeen()), now: Date())
+            // orphan every other browser's check-ins, Safari's included. `serverState()`
+            // (Finding 2, final review) is what actually turns a port collision into a
+            // visible row instead of a button that silently does nothing.
+            let s = browserButtonStatus(lastSeen: mostRecentBrowserCheckIn(lastSeen()), now: Date(),
+                                        serverState: serverState())
             DispatchQueue.main.async { completion(s) }
         case .fullDiskAccess:
             // Off-main, matching `automation(bundleId:ask:)` — `open()` on a TCC-protected

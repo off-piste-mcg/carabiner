@@ -55,7 +55,14 @@ final class MenuBarController: NSObject {
                 // dictionary itself, is what keeps the browserButton row honest as new
                 // requests land after the window is already open.
                 checker: LivePermissionChecker(browser: Self.browser,
-                                               lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] }),
+                                               lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] },
+                                               // Finding 2, final review: a closure, not a
+                                               // captured value, for the same reason
+                                               // `lastSeen` above is one — a port failure
+                                               // that happens AFTER this window opens must
+                                               // still read live, not whatever `grabServer`
+                                               // reported the moment the checker was built.
+                                               serverState: { [weak self] in self?.grabServer?.state ?? .stopped }),
                 hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
                 clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
         }

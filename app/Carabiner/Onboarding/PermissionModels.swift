@@ -13,6 +13,13 @@ import UserNotifications
 /// (review fix round 1, Finding 3).
 enum PermissionStatus: Equatable {
     case notDetermined, granted, denied, targetNotRunning, notApplicable
+    /// The extension server (`GrabServer`) failed to bind its port — Finding 2, final
+    /// review. Distinct from `.denied`: there is no OS prompt and no System Settings pane
+    /// that can fix a port collision, so a row in this state must not offer either. The
+    /// associated string is the listener's own failure reason (`NWError.localizedDescription`),
+    /// surfaced verbatim so a real port squatter is diagnosable from the row instead of a
+    /// button that silently does nothing.
+    case serverUnavailable(String)
 }
 
 /// The permission rows of the setup window. The hotkey test is NOT one of these — it has
@@ -110,6 +117,14 @@ enum PermissionRow: CaseIterable {
             // a settled, fine state, not something still waiting on the user.
             return RowPresentation(tick: .ok, buttonTitle: nil, action: .none,
                                    detail: "Only needed if you use Safari")
+        case .serverUnavailable(let reason):
+            // Finding 2, final review: no action can fix a port collision from in here —
+            // no OS prompt, no Settings pane. Offering "Allow" would be a dead button;
+            // offering "Open System Settings" would send the user to a pane with nothing
+            // relevant in it. State the failure and stop — `.cross`, because unlike
+            // `.notApplicable` this genuinely is a problem worth flagging.
+            return RowPresentation(tick: .cross, buttonTitle: nil, action: .none,
+                                   detail: "Can't listen for the extension — \(reason)")
         }
     }
 }
@@ -155,8 +170,20 @@ func notificationStatus(authorization: UNAuthorizationStatus,
 /// the next relaunch when the dictionary was in-memory only — persistence made a bad
 /// timestamp durable. `elapsed < 0` means `lastSeen` is after `now`, which is never a
 /// legitimate check-in.
-func browserButtonStatus(lastSeen: Date?, now: Date,
+///
+/// `serverState` is checked FIRST, before `lastSeen` (Finding 2, final review): the design
+/// doc promised a bind failure "surfaces the failure in the onboarding row ('port in
+/// use')", but nothing read `GrabServer.state` to make that true — a port collision
+/// presented as a button that silently did nothing, and worse, is what a local port
+/// squatter looks like too (every extension POST would go to whatever else is holding
+/// 51847 instead). A stale-but-fresh check-in from BEFORE the port was lost must not paper
+/// over a server that cannot accept new connections right now, which is why this is
+/// checked before, not after, the ordinary freshness logic. Defaults to `.listening` so
+/// every pre-existing call site (this function predates GrabServer.State existing at all)
+/// keeps its old behaviour unchanged.
+func browserButtonStatus(lastSeen: Date?, now: Date, serverState: GrabServer.State = .listening,
                          freshness: TimeInterval = 60 * 60 * 24 * 14) -> PermissionStatus {
+    if case .failed(let reason) = serverState { return .serverUnavailable(reason) }
     guard let lastSeen else { return .notDetermined }
     let elapsed = now.timeIntervalSince(lastSeen)
     guard elapsed >= 0, elapsed < freshness else { return .notDetermined }
@@ -224,6 +251,9 @@ func toggleAction(desired: Bool, status: PermissionStatus) -> ToggleIntent {
         // Nothing to request — there is no permission missing to ask for; see
         // PermissionStatus.notApplicable.
         case .notApplicable:                  return .nothing
+        // Nothing this app can do in-process OR via System Settings fixes a port
+        // collision (Finding 2, final review) — see PermissionStatus.serverUnavailable.
+        case .serverUnavailable:              return .nothing
         }
     } else {
         // Turning OFF is never something we can do ourselves, whatever the current state.

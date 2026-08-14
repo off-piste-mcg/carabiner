@@ -26,9 +26,19 @@ test("item with a zero total does not divide by zero", () => {
   assert.equal(ringFractionForProgress({ stage: "item", index: 0, total: 0 }), 0);
 });
 
-test("convert and save fill the ring", () => {
+test("convert fills the ring", () => {
   assert.equal(ringFractionForProgress({ stage: "convert", mode: "remux" }), 1);
-  assert.equal(ringFractionForProgress({ stage: "save" }), 1);
+});
+
+// Corrected, final review, Finding 4: this used to assert `save` also fills the ring,
+// grouped with `convert` in the implementation — which directly contradicted
+// ProgressEvent.swift's `beginsActivity` (`.save` is explicitly listed as NOT activity)
+// despite this file's header claiming the two are kept in sync. `convert` already leaves
+// the ring at 1 on any path that reports it; a gallery-dl-only grab has no `convert`
+// stage at all (gotcha #23), so `save` there must leave the ring exactly where the last
+// `item` left it rather than snapping it to 100% on a stage that isn't "download work".
+test("save does not advance the ring — it's the completion flourish, not download feedback", () => {
+  assert.equal(ringFractionForProgress({ stage: "save" }), null);
 });
 
 test("an unrecognised stage does not move the ring", () => {
