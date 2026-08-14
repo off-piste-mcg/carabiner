@@ -357,22 +357,46 @@ None of these was a review finding left unfixed by accident — each was seen, j
 non-blocking, and consciously deferred. They are recorded here because the working ledger
 that held them is scratch and is being deleted.
 
+**RESOLVED in the final fix wave (2026-08-14) — kept because the reasoning is the useful part:**
+
+- ~~`GrabRunner.run()` has no watchdog~~ **Fixed.** A hung `carabiner` child used to pin
+  `busy = true` for the life of the app: every `/grab` returned 409 forever *and* the hotkey
+  silently no-opped, with no user-visible cause and no recovery short of quitting. There is
+  now an **inactivity** bound (any byte on stderr resets it; `.prompt` switches to the same
+  3600s backstop `GrabServer` uses, because a human on a dialog is not a stall), and on
+  expiry the child is terminated and an ordinary failure returned so `busy` clears through
+  the existing completion path. The property the whole fix rests on was nearly wrong and was
+  checked rather than assumed: `Process.terminate()` reaches the **process group**, so the
+  yt-dlp/gallery-dl grandchild dies too and both pipes hit EOF in 0.07s. Had it only killed
+  bash, `group.wait()` would still have blocked forever and the fix would have been inert.
+- ~~A failed listener bind is invisible to the user~~ **Fixed**, and it was worse than
+  cosmetic: a local process that binds 51847 *before* Carabiner starts wins, and the
+  extension would then POST every permalink the user clicks to the squatter, which could
+  fake progress and outcomes too. `browserButtonStatus` now consults `GrabServer.state`
+  *before* `lastSeen` (so a stale-but-fresh check-in cannot paper over a lost port) and
+  renders `.serverUnavailable`, which deliberately offers no Allow action — the previous
+  `.notDetermined` path would have opened a Web Store page at a user whose real problem is a
+  squatted port.
+- ~~The 64 KB request cap has never been exercised over the wire~~ **Now covered** by a
+  loopback smoke test that drives a real `GrabServer` over a real socket. The 5s connection
+  deadline is still not exercised.
+
 **Reachability of a real failure:**
 
-- **`GrabRunner.run()` has no watchdog, and this is pre-existing, not new.** A hung
-  `carabiner` child pins `busy = true` for the life of the app: every `/grab` then returns
-  409 forever *and* the hotkey silently no-ops. The server's 600s deadline reclaims the
-  file descriptor but not the busy flag. This is the sharpest item on the list and deserves
-  a roadmap entry rather than a footnote.
-- **A failed listener bind is invisible to the user.** `GrabServer.state` becomes
-  `.failed(...)` and it is logged, but `state` is `private(set)` and nothing outside the
-  class reads it, so a port collision presents as a button that does nothing. The design
-  called for surfacing it in the onboarding row; that part was not built.
-- **Nothing stops the listener.** There is no `stop()`/`deinit`, so nothing cancels the
-  listener or in-flight connections on teardown.
-- **The 64 KB request cap and the 5s connection deadline have never been exercised over the
-  wire.** Both live in the I/O layer, which no test in this repo can reach. Worth one manual
-  `curl`/`nc` check before release.
+- **A killed re-encode leaves a truncated file in `~/Downloads`.** `reencode` runs
+  `ffmpeg -y … "$OUTDIR/…_fixed.mp4"` directly into the output directory, so if the new
+  watchdog fires during a long *silent* encode the partial `_fixed.mp4` is left sitting
+  beside real grabs. gallery-dl is unaffected — it works in a `mktemp -d` — though a kill
+  there leaks the temp directory, since `rm -rf "$tmp"` never runs.
+- **Nothing stops the listener.** There is still no `stop()`/`deinit`, so nothing cancels
+  the listener or in-flight connections on teardown. The loopback tests work around it with
+  one port per test method rather than tearing down, which leaves a handful of listeners
+  alive for the test process's lifetime.
+- **`watchdog.fired` is read unsynchronized** from the calling thread while the timer queue
+  writes it under a lock (`cancel()` does not wait for an in-flight handler). Benign today,
+  but strict concurrency checking or TSan will flag it.
+- **The 5s connection deadline has never been exercised over the wire.** Worth one manual
+  `nc` check before release.
 
 **Bounded leaks and inefficiencies, all judged acceptable:**
 
