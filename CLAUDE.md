@@ -410,11 +410,25 @@ that held them is scratch and is being deleted.
 
 **Reachability of a real failure:**
 
-- **A killed re-encode leaves a truncated file in `~/Downloads`.** `reencode` runs
-  `ffmpeg -y … "$OUTDIR/…_fixed.mp4"` directly into the output directory, so if the new
-  watchdog fires during a long *silent* encode the partial `_fixed.mp4` is left sitting
-  beside real grabs. gallery-dl is unaffected — it works in a `mktemp -d` — though a kill
-  there leaks the temp directory, since `rm -rf "$tmp"` never runs.
+- ~~A killed re-encode leaves a truncated file in `~/Downloads`~~ **Fixed 2026-08-14, and
+  the note undersold it.** Measured before the fix: SIGTERM 4s into a 120s encode left a
+  19 MB `_fixed.mp4` that QuickTime opens happily and that simply ends at 25s — not
+  corrupt, just silently short, i.e. indistinguishable from a real grab until you watch it
+  to the end. `reencode` now writes to a hidden sibling (`.<name>.part.mp4`, same
+  directory) and renames on success, so the promotion is an atomic rename and a kill
+  leaves nothing that looks like a grab. Two details are load-bearing and easy to undo by
+  "tidying" the name: it must still end in `.mp4` (ffmpeg picks its muxer from the output
+  extension and a bare `.part` fails outright), and it must sit in `$OUTDIR` (a rename
+  across filesystems is a copy, which a watchdog can interrupt halfway). Verified both
+  directions against the real bundled ffmpeg with a 10-bit source forcing a genuine
+  libx264 pass: completing promotes the file and leaves no `.part`; killing the process
+  group mid-encode leaves the hidden `.part.mp4` and **no** `ABC123_fixed.mp4`.
+- **Still open, found by that same test: a killed grab leaks its 84 MB temp source into
+  `~/Downloads`.** `ig_video`'s `tmp` lives in `$OUTDIR`, and `rm -f "${tmp}".*` never
+  runs on a kill, so `.carabiner_src_<pid>.mp4` is left behind (hidden, but full-size).
+  The `.part` file has the same property — cleaned on the *next* run of the same grab, not
+  on the kill itself. A TERM/INT trap would close both; nothing has one today. gallery-dl
+  is unaffected — it works in a `mktemp -d` — though a kill there leaks that directory.
 - **Nothing stops the listener.** There is still no `stop()`/`deinit`, so nothing cancels
   the listener or in-flight connections on teardown. The loopback tests work around it with
   one port per test method rather than tearing down, which leaves a handful of listeners
@@ -422,8 +436,10 @@ that held them is scratch and is being deleted.
 - **`watchdog.fired` is read unsynchronized** from the calling thread while the timer queue
   writes it under a lock (`cancel()` does not wait for an in-flight handler). Benign today,
   but strict concurrency checking or TSan will flag it.
-- **The 5s connection deadline has never been exercised over the wire.** Worth one manual
-  `nc` check before release.
+- ~~The 5s connection deadline has never been exercised over the wire~~ **Exercised
+  2026-08-14, and it works.** A socket opened to `127.0.0.1:51847` that then sends nothing
+  is closed by the app after **5.25s** with zero bytes written. Same session: `curl
+  /health` returns **403**, which is gate 1 (no extension `Origin`) doing its job.
 
 **Bounded leaks and inefficiencies, all judged acceptable:**
 

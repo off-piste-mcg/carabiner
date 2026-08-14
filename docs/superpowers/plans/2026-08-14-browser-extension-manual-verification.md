@@ -101,7 +101,12 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
 
 ## E. One-off checks worth doing once
 
-- [ ] **20. The 5s connection deadline** has never been exercised over the wire. `nc` to
-      127.0.0.1:51847, send nothing, confirm the connection closes.
-- [ ] **21. A long silent re-encode killed by the watchdog** leaves a truncated
-      `_fixed.mp4` in `~/Downloads`. Confirm and decide whether to clean up on kill.
+- [x] **20. The 5s connection deadline.** Done 2026-08-14: a socket that connects and then
+      sends nothing is closed after **5.25s**, zero bytes written. `curl /health` returns
+      **403** in the same session — gate 1 (no extension `Origin`) working as designed.
+- [x] **21. A long silent re-encode killed by the watchdog.** Done 2026-08-14. Confirmed
+      first — a SIGTERM'd encode left a 19 MB `_fixed.mp4` that plays fine and just ends
+      early — then fixed: `reencode` writes to a hidden `.part.mp4` sibling and renames on
+      success. Re-tested both directions against the real bundled ffmpeg. **Left open:** the
+      same kill leaks `ig_video`'s 84 MB temp source (`.carabiner_src_<pid>.mp4`) into
+      `~/Downloads`, because `rm -f "${tmp}".*` never runs on a kill. Needs a TERM trap.

@@ -296,7 +296,25 @@ reencode() {
     *" -c:v copy "*) progress "convert:remux" ;;
     *)               progress "convert:encode" ;;
   esac
-  ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$out"
+  # Encode to a hidden sibling and rename on success, so a killed encode never leaves
+  # anything in ~/Downloads that looks like a grab. This is not hypothetical tidiness:
+  # SIGTERM'd 4s into a 120s encode (the app's grab watchdog terminates the process
+  # group), the bundled ffmpeg left a 19 MB file that QuickTime opens happily and that
+  # simply ends at 25s — not corrupt, just silently short, and indistinguishable from a
+  # real grab until you watch it to the end. Measured 2026-08-14.
+  #
+  # Two details are load-bearing. The name still ends in .mp4, because ffmpeg picks its
+  # muxer from the output extension and a bare ".part" makes it fail outright. And the
+  # part file sits in the SAME directory as $out, so the promotion is a rename on one
+  # filesystem — atomic, never a copy the watchdog could interrupt halfway.
+  local part="${out%/*}/.${out##*/}.part.mp4"
+  rm -f "$part"                       # a previous kill may have left one
+  if ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$part"; then
+    mv -f "$part" "$out"
+  else
+    rm -f "$part"
+    return 1
+  fi
 }
 
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
