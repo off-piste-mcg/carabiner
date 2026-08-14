@@ -265,6 +265,33 @@ ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
 
 ## Where we are / what's next
 
+> ### ⚠️ READ THIS FIRST — there is unmerged work on a branch (2026-08-14)
+>
+> **Branch `feat/browser-extension`, 35 commits, NOT merged into `main`.** It adds the
+> in-page Instagram download button for Chrome and Safari (a third front end — see "What
+> this project is"). It is **built and reviewed, and has never run in a browser.**
+> All 227 Swift tests, 64 JS tests and both shell suites pass, and twelve rounds of review
+> are complete — but every test in this repo is blind to the thing that actually matters
+> here, which is whether a browser loads and runs the extension at all.
+>
+> **The next work is not code. It is:**
+> **`docs/superpowers/plans/2026-08-14-browser-extension-manual-verification.md`** —
+> 21 items, ordered by risk, roughly 30-40 minutes with a real browser and a logged-in
+> Instagram session. Do NOT describe the extension as working until that is done.
+>
+> The two sharpest unknowns, both at the top of that list: whether Safari will load the
+> extension at all (Apple's own converter template sandboxes these, and Carabiner cannot be
+> sandboxed — it shells out to yt-dlp/ffmpeg and writes `~/Downloads`), and whether
+> granting Full Disk Access takes effect without quitting and relaunching Carabiner.
+>
+> One item is a spending gate: **check `chrome://policy` before paying the Chrome Web Store
+> $5.** This Chrome profile is managed by offpiste.agency, and if that policy blocks
+> extensions then an unlisted listing does not help the team either.
+>
+> The design is `docs/superpowers/specs/2026-08-12-browser-extension-design.md`; the
+> implementation plan is `docs/superpowers/plans/2026-08-12-browser-extension.md`. What
+> that work earned the hard way is gotchas #28-#34 plus "Known rough edges" below.
+
 Phase 1 of the app is **done and merged** (see the spec's phasing section, corrected after
 the fact). Phase 2, bundling the binaries, is **partially done**:
 
