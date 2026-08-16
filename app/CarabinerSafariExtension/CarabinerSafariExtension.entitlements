@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Entitlements for the APPEX ONLY - Carabiner.app itself must never be
+	  sandboxed (it shells out to yt-dlp/ffmpeg and writes ~/Downloads), and a
+	  process is governed by its own signature, so sandboxing the appex does not
+	  leak into the app (the same isolation gotcha #20 rests on, from the other
+	  direction).
+
+	  app-sandbox is not optional politeness: pkd refuses to register an
+	  unsandboxed plug-in at discovery, logging "Ignoring mis-configured plugin
+	  ... plug-ins must be sandboxed" - measured 2026-08-16, and the reason the
+	  extension never appeared in Safari's Extensions list. The failure is
+	  silent from Safari's side, which is exactly the shape the manual
+	  checklist's item 1 feared; the fear was just aimed at the wrong bundle.
+
+	  network.client matches Apple's own web-extension template. The extension's
+	  fetch to 127.0.0.1:51847 runs in Safari's extension processes rather than
+	  this appex, but the native side is sandboxed with it and the entitlement
+	  is what the template grants - dropping it is an experiment to run on
+	  purpose someday, not a cleanup.
+	-->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

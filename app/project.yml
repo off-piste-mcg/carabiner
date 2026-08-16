@@ -283,6 +283,11 @@ targets:
         DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}
         ENABLE_HARDENED_RUNTIME: YES
         GENERATE_INFOPLIST_FILE: NO
+        # The appex MUST be sandboxed or pkd refuses to register it and Safari
+        # never lists the extension ("plug-ins must be sandboxed" - see the
+        # entitlements file's comment). The app stays unsandboxed; only this
+        # target carries the entitlement.
+        CODE_SIGN_ENTITLEMENTS: CarabinerSafariExtension/CarabinerSafariExtension.entitlements
       configs:
         Release:
           CODE_SIGN_STYLE: Manual
