@@ -265,32 +265,33 @@ ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
 
 ## Where we are / what's next
 
-> ### ⚠️ READ THIS FIRST — there is unmerged work on a branch (2026-08-14)
+> ### ⚠️ READ THIS FIRST — there is unmerged work on a branch (updated 2026-08-16)
 >
-> **Branch `feat/browser-extension`, 35 commits, NOT merged into `main`.** It adds the
+> **Branch `feat/browser-extension`, ~40 commits, NOT merged into `main`.** It adds the
 > in-page Instagram download button for Chrome and Safari (a third front end — see "What
-> this project is"). It is **built and reviewed, and has never run in a browser.**
-> All 227 Swift tests, 64 JS tests and both shell suites pass, and twelve rounds of review
-> are complete — but every test in this repo is blind to the thing that actually matters
-> here, which is whether a browser loads and runs the extension at all.
+> this project is"). As of 2026-08-16 it is **working in both browsers, verified by a
+> human**: buttons render on real Instagram pages, real grabs complete through the
+> loopback channel, and the mixed video+image carousel behaves (This slide / All / Cancel
+> downloads nothing). The button's rest glyph is the Carabiner mark since 22f30c7.
 >
-> **The next work is not code. It is:**
-> **`docs/superpowers/plans/2026-08-14-browser-extension-manual-verification.md`** —
-> 21 items, ordered by risk, roughly 30-40 minutes with a real browser and a logged-in
-> Instagram session. Do NOT describe the extension as working until that is done.
+> Getting Safari there took one real fix: **pkd refuses an unsandboxed appex at
+> discovery** ("plug-ins must be sandboxed"), so the extension silently never appeared in
+> Safari's list. The sandbox requirement is on the **appex, not the app** — see gotcha
+> #35 and commit 21493d0. The old fear that "Carabiner cannot be sandboxed" was aimed at
+> the wrong bundle.
 >
-> The two sharpest unknowns, both at the top of that list: whether Safari will load the
-> extension at all (Apple's own converter template sandboxes these, and Carabiner cannot be
-> sandboxed — it shells out to yt-dlp/ffmpeg and writes `~/Downloads`), and whether
-> granting Full Disk Access takes effect without quitting and relaunching Carabiner.
->
-> One item is a spending gate: **check `chrome://policy` before paying the Chrome Web Store
-> $5.** This Chrome profile is managed by offpiste.agency, and if that policy blocks
-> extensions then an unlisted listing does not help the team either.
+> **Still open before this ships**, from
+> `docs/superpowers/plans/2026-08-14-browser-extension-manual-verification.md`
+> (11 of 21 done, each tick dated):
+> items 10-11 (dialog-left-open patience; cold-launch on click), 12-17 (the Setup &
+> Permissions window checks — sharpest: does a fresh Full Disk Access grant take effect
+> without relaunching Carabiner? nobody knows), and 18-19 (the Chrome Web Store listing —
+> **check `chrome://policy` before paying the $5**; this Chrome profile is managed by
+> offpiste.agency, and `OnboardingViewModel.chromeWebStoreURL` is still `PLACEHOLDER_ID`).
 >
 > The design is `docs/superpowers/specs/2026-08-12-browser-extension-design.md`; the
 > implementation plan is `docs/superpowers/plans/2026-08-12-browser-extension.md`. What
-> that work earned the hard way is gotchas #28-#34 plus "Known rough edges" below.
+> that work earned the hard way is gotchas #28-#35 plus "Known rough edges" below.
 
 Phase 1 of the app is **done and merged** (see the spec's phasing section, corrected after
 the fact). Phase 2, bundling the binaries, is **partially done**:
@@ -349,34 +350,35 @@ release, which is currently `deps-2026.07.1`. The README's download link is corr
 while the app release is newest — publish future `deps-*` releases as **pre-releases** or
 they will steal the link and send teammates to a release with no DMG in it.
 
-**The browser extension: built, not yet shipped or driven end to end (2026-08-13,
-branch `feat/browser-extension`).** Eleven of twelve tasks are complete and reviewed;
-`extension/`'s offline suite is **55/55** (`node --test` from `extension/`, re-run for this
-doc pass). What a human has actually verified, and it is worth separating from what was
-merely built:
+**The browser extension: WORKING in both browsers, not yet shipped (verified 2026-08-16,
+branch `feat/browser-extension`).** `extension/`'s offline suite is **64/64** (`node
+--test` from `extension/`). What a human has actually verified:
 
-- **Verified:** both browsers send an extension `Origin`, and Safari preflights where
-  Chrome doesn't (gotcha #29). Safari cookies need Full Disk Access, with a control run
-  (gotcha #28). The real Instagram markup is captured and the parser was fixed against it
-  (gotcha #31). The hotkey path still works after the shared-grab-path refactor.
-- **NOT verified, and must not be described as covered:** a real, successful Instagram
-  download through `POST /grab` — only a syntactically valid but nonexistent post was ever
-  pushed through it. Nor has the button been clicked in a real browser on instagram.com, in
-  either Chrome or Safari. The whole in-browser half of this feature is unexercised.
+- **Verified 2026-08-14/16 (Wisse, real browsers, logged-in Instagram):** buttons render
+  on the feed, profile grids and post pages in **both Chrome and Safari**; real grabs
+  complete end to end through `POST /grab` (files in `~/Downloads`, branded banner); the
+  **mixed video+image carousel** behaves — "This slide", "All", and Cancel downloads
+  nothing with no banner (gotchas #15/#24's exact failure shapes, both clean). Safari
+  needed the appex sandbox fix first (gotcha #35) plus Develop → Allow Unsigned
+  Extensions. Earlier: both browsers send an extension `Origin`, Safari preflights where
+  Chrome doesn't (gotcha #29), Safari cookies need Full Disk Access (gotcha #28), the
+  parser is fixed against captured real markup (gotcha #31), and the hotkey path still
+  works after the shared-grab-path refactor.
+- **NOT yet verified:** the checklist's items 10-17 — dialog-left-open patience,
+  cold-launching the app from a button click, and the whole Setup & Permissions window
+  section (sharpest: whether a fresh FDA grant registers without relaunching Carabiner,
+  and the Safari→Chrome cookie fallback end to end).
 
-What is left, all of it needing a human with a Google account and a logged-in browser:
+What is left before shipping, needing a human with a Google account:
 
 1. **The Chrome Web Store listing does not exist.** `OnboardingViewModel.chromeWebStoreURL`
    is still `…/detail/PLACEHOLDER_ID`, so the Chrome row's Allow button opens a dead URL
-   today. Publishing it is a $5 one-off developer account, an **unlisted** listing, and a
-   privacy justification that says plainly what the `127.0.0.1` host permission is for
-   (handing the post URL to the companion app; the extension downloads nothing and collects
-   nothing). Then the real ID replaces the placeholder and the app is rebuilt.
-2. **Full end-to-end verification in both browsers**, snapshotting `~/Downloads` filenames
-   before and after each grab (never timestamps): a feed image, a profile-grid thumbnail, a
-   reel opened in QuickTime, and a **mixed video+image carousel** — gotcha #15's second
-   failure only shows on a mixed post, and gotcha #24's Cancel must download nothing and
-   post no banner.
+   today. **Check `chrome://policy` first** (managed profile). Publishing is a $5 one-off
+   developer account, an **unlisted** listing, and a privacy justification that says
+   plainly what the `127.0.0.1` host permission is for (handing the post URL to the
+   companion app; the extension downloads nothing and collects nothing). Then the real ID
+   replaces the placeholder and the app is rebuilt.
+2. **The remaining checklist items (10-17)** in the manual-verification doc.
 
 ### Known rough edges in the extension work (deferred, not forgotten)
 
@@ -1191,6 +1193,36 @@ from the URL for "just this slide".
       intact would still pass every one of them. The file's own header says the I/O half
       is not covered — say so where the tests live, rather than letting a green count
       imply more than it means.
+
+35. **pkd silently refuses an unsandboxed appex — the App Sandbox requirement is on the
+    APPEX, not the app, and the two do not constrain each other.** Found 2026-08-16, the
+    first time a human looked for the extension in Safari's Extensions list: it simply
+    wasn't there. No error in Safari, nothing in the build, `pluginkit -a` returns
+    success-shaped silence and registers nothing. The one place the truth appears is
+    pkd's own log:
+
+    ```
+    pkd: rejecting; Ignoring mis-configured plugin at [...CarabinerSafariExtension.appex]:
+    plug-ins must be sandboxed
+    ```
+
+    The diagnostic that finds it:
+    ```bash
+    /usr/bin/log show --last 5m 2>/dev/null | grep -i CarabinerSafariExtension
+    pluginkit -m -v | grep -i carabiner   # registered at all?
+    ```
+
+    The design had flagged "Apple's converter template sandboxes these, and Carabiner
+    cannot be sandboxed — it shells out to yt-dlp/ffmpeg and writes `~/Downloads`" as the
+    top risk. That fear was aimed at the wrong bundle: a process is governed by its own
+    signature (gotcha #20's isolation, from the other direction), so the **appex** carries
+    `com.apple.security.app-sandbox` (+ `network.client`, matching Apple's template) in
+    `app/CarabinerSafariExtension/CarabinerSafariExtension.entitlements`, and the **app**
+    stays unsandboxed and keeps shelling out. Sandboxing the appex costs nothing here
+    because it is a thin wrapper: the extension's `fetch` to `127.0.0.1:51847` runs in
+    Safari's extension processes, not the appex. Verified both directions on this machine:
+    pluginkit refused the identical appex without the entitlement and lists it with it,
+    and the sandboxed-appex app still grabs and serves `/health`.
 
 ## Dependencies
 

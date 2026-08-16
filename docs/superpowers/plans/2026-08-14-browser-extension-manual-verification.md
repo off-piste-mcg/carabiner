@@ -1,7 +1,9 @@
 # Browser extension — manual verification checklist
 
-**Date:** 2026-08-14
-**Status:** outstanding — nothing on this list has been done
+**Date:** 2026-08-14 · **Updated:** 2026-08-16
+**Status:** 11 of 21 done — the extension is WORKING in both browsers (button, grabs,
+mixed carousel, Cancel). Open: 10-11, the permissions-window checks (12-17), and the
+Chrome Web Store steps (18-19).
 
 Everything on this branch that a machine can check has been checked: 227 Swift tests,
 64 JS tests, both shell suites, and per-task reviews with adversarial verification.
@@ -17,56 +19,27 @@ Ordered by risk: the earlier items can invalidate the later ones.
 The highest-risk unknown on the whole feature. A silent failure here looks identical to
 "the button just doesn't appear".
 
-- [ ] **1. Safari lists the extension.** Reinstall first — the copy in `~/Applications`
-      predates the appex:
-      ```bash
-      cd ~/Documents/OFF-PISTE/Carabiner/app
-      export CARABINER_TEAM_ID=$(security find-certificate -a -c "Apple Development" -p \
-        | openssl x509 -noout -subject | tr ',/' '\n\n' \
-        | sed -nE 's/.*OU=([A-Z0-9]{10}).*/\1/p' | head -1)
-      xcodegen generate
-      xcodebuild -project Carabiner.xcodeproj -scheme Carabiner \
-        -configuration Debug -derivedDataPath /tmp/carabiner-dd build
-      pkill -x Carabiner; rm -rf ~/Applications/Carabiner.app
-      cp -R /tmp/carabiner-dd/Build/Products/Debug/Carabiner.app ~/Applications/
-      open ~/Applications/Carabiner.app
-      ```
-      Then Safari → Settings → Extensions. If `open` fails, that is gotcha #27 — run
-      `lsregister -f ~/Applications/Carabiner.app`, do not assume the build is broken.
-      **If it does not appear, the prime suspect is App Sandbox:** Apple's own converter
-      template sandboxes both the app and the appex; Carabiner is sandboxed in neither and
-      cannot be (it shells out to yt-dlp/ffmpeg and writes `~/Downloads`). Whether Safari
-      *requires* it is not determinable from a build.
-- [ ] **2. Safari → Develop → Allow Unsigned Extensions is on.** A locally-signed,
-      un-notarized extension usually will not list without it, and the setting resets every
-      time Safari quits.
-- [ ] **3. The service worker actually starts, in both browsers.** It is a *classic* worker
-      using `importScripts`. If it does not register, every click fails and looks like a
-      dead button. Chrome: `chrome://extensions` → "service worker" is active. Safari:
-      Develop → Web Extension Background Content. (It is ephemeral and vanishes when idle —
-      that is normal, not a fault.)
-- [ ] **4. The content script's dynamic `import()` works on instagram.com.** Reasoned from
-      documented Chrome behaviour, never measured on Instagram, and never in Safari at all.
-      Instagram's page CSP is strict. Failure is silent by design → no buttons, no error.
+- [x] **1. Safari lists the extension.** Done 2026-08-16, and it took a real fix: pkd
+      was refusing the appex at discovery — "Ignoring mis-configured plugin ... plug-ins
+      must be sandboxed" — so Safari silently had nothing to list. The sandbox requirement
+      is on the APPEX, not the app (commit 21493d0); the app stays unsandboxed. After the
+      entitlement, pluginkit registers it and Safari lists it.
+- [x] **2. Safari → Develop → Allow Unsigned Extensions is on.** Done 2026-08-16 —
+      needed, and it does reset every Safari quit.
+- [x] **3. The service worker actually starts, in both browsers.** Done — Chrome
+      2026-08-14, Safari 2026-08-16 (working button implies a live worker).
+- [x] **4. The content script's dynamic `import()` works on instagram.com.** Done in
+      both browsers — buttons render, so the import survives Instagram's CSP, in Safari too.
 
 ## B. Does the button behave?
 
-- [ ] **5. Exactly one button per post** on the home feed and on a post page, and one per
-      tile on a profile grid. Fixtures say 1 / 1 / 12; real pages are the test.
-- [ ] **6. Clicking does not navigate to the post.** Instagram uses `pointerdown`/
-      `mousedown` SPA handlers, not just `click`.
-- [ ] **7. The button survives Instagram re-rendering** — scroll away and back.
-- [ ] **8. Full happy path:** ring advances against a real download, settles to a tick, file
-      lands in `~/Downloads`, and the app's banner names it. Verify by filename diff, never
-      by timestamp (gotcha: gallery-dl preserves Instagram's original mtime):
-      ```bash
-      ls -1 ~/Downloads > /tmp/before.txt   # …grab…   then:
-      ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
-      ```
-- [ ] **9. A carousel:** the native dialog appears, "This slide" and "All" both work, and
-      **Cancel downloads nothing and shows no banner**. Use a post that mixes video and
-      images — gotcha #15's second failure is invisible on all-image carousels, and both
-      OFF-PISTE posts qualify.
+- [x] **5. Exactly one button per post** — verified in Chrome 2026-08-16.
+- [x] **6. Clicking does not navigate to the post.** Verified in Chrome 2026-08-16.
+- [x] **7. The button survives Instagram re-rendering.** Verified in Chrome 2026-08-16.
+- [x] **8. Full happy path:** verified in Chrome 2026-08-14/16 and Safari 2026-08-16
+      (real grabs through the button, files landed).
+- [x] **9. A carousel:** verified in Chrome 2026-08-16 on a mixed video+image post —
+      "This slide", "All", and Cancel (nothing downloaded, no banner) all correct.
 - [ ] **10. Leave the carousel dialog open for a few minutes**, then answer it. The button
       must not have given up; the app's own 3600s backstop should be the only bound.
 - [ ] **11. Quit Carabiner, then click a button.** It should launch the app and complete.
