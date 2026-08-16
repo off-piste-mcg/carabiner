@@ -423,12 +423,16 @@ that held them is scratch and is being deleted.
   directions against the real bundled ffmpeg with a 10-bit source forcing a genuine
   libx264 pass: completing promotes the file and leaves no `.part`; killing the process
   group mid-encode leaves the hidden `.part.mp4` and **no** `ABC123_fixed.mp4`.
-- **Still open, found by that same test: a killed grab leaks its 84 MB temp source into
-  `~/Downloads`.** `ig_video`'s `tmp` lives in `$OUTDIR`, and `rm -f "${tmp}".*` never
-  runs on a kill, so `.carabiner_src_<pid>.mp4` is left behind (hidden, but full-size).
-  The `.part` file has the same property — cleaned on the *next* run of the same grab, not
-  on the kill itself. A TERM/INT trap would close both; nothing has one today. gallery-dl
-  is unaffected — it works in a `mktemp -d` — though a kill there leaks that directory.
+- ~~A killed grab leaks its 84 MB temp source into `~/Downloads`~~ **Fixed 2026-08-16**
+  with a TERM/INT trap that sweeps all three temps (the `$$`-named source, the in-flight
+  `.part`, gallery-dl's mktemp dir). Two properties worth keeping in mind before touching
+  it: the trap only works *because* the watchdog signals the whole process group — bash
+  runs a trap after the foreground child exits, and the child is dying of the same signal,
+  so the trap fires in ~0.07s instead of waiting out the encode (a kill aimed at bash
+  alone would stall it). And cleanup is by registration (`CLEANUP_PART`/`CLEANUP_GLTMP`),
+  deliberately not a glob over the shared `$OUTDIR`, which could delete a concurrent
+  grab's live encode. Verified with real group-kills mid-encode and mid-gallery: exit
+  143, empty output dir, no mktemp dir left.
 - **Nothing stops the listener.** There is still no `stop()`/`deinit`, so nothing cancels
   the listener or in-flight connections on teardown. The loopback tests work around it with
   one port per test method rather than tearing down, which leaves a handful of listeners

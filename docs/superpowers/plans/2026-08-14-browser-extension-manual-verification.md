@@ -107,6 +107,6 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
 - [x] **21. A long silent re-encode killed by the watchdog.** Done 2026-08-14. Confirmed
       first — a SIGTERM'd encode left a 19 MB `_fixed.mp4` that plays fine and just ends
       early — then fixed: `reencode` writes to a hidden `.part.mp4` sibling and renames on
-      success. Re-tested both directions against the real bundled ffmpeg. **Left open:** the
-      same kill leaks `ig_video`'s 84 MB temp source (`.carabiner_src_<pid>.mp4`) into
-      `~/Downloads`, because `rm -f "${tmp}".*` never runs on a kill. Needs a TERM trap.
+      success. Re-tested both directions against the real bundled ffmpeg. The follow-on
+      temp-source leak that test found was closed 2026-08-16 by a TERM/INT trap
+      (see CLAUDE.md's rough-edges entry); verified with real group-kills.
