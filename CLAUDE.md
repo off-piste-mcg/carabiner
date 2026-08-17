@@ -291,7 +291,7 @@ ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
 >
 > The design is `docs/superpowers/specs/2026-08-12-browser-extension-design.md`; the
 > implementation plan is `docs/superpowers/plans/2026-08-12-browser-extension.md`. What
-> that work earned the hard way is gotchas #28-#35 plus "Known rough edges" below.
+> that work earned the hard way is gotchas #28-#36 plus "Known rough edges" below.
 
 Phase 1 of the app is **done and merged** (see the spec's phasing section, corrected after
 the fact). Phase 2, bundling the binaries, is **partially done**:
@@ -455,10 +455,12 @@ that held them is scratch and is being deleted.
 - A grab whose watchdog fired and which never sends another message stays in the
   extension's tracking map for the tab's lifetime. This is the deliberate price of "amber
   must not delete" (gotcha #33) — bounded by clicks per tab, two small closures each.
-- The container scan (`containers.js`, driven once per animation frame from `content.js`)
-  sweeps every anchor in the document and regexes each, which is strictly more work than
-  the CSS prefilter it replaced. Cheap and bounded, but it is the first place to look if
-  the page ever feels heavy.
+- The container scan (`containers.js`, driven at most once per animation frame from
+  `content.js`) sweeps every anchor in the document and regexes each, which is strictly
+  more work than the CSS prefilter it replaced. Cheap and bounded, but it is the first
+  place to look if the page ever feels heavy. (Since the overlay refactor — gotcha #36 —
+  our own DOM writes land outside `body`, so a scan can no longer schedule another scan;
+  the old self-amplification risk is structurally gone.)
 - Invalid UTF-8 or LF-only request framing never returns 400 — the parser cannot tell
   incomplete from malformed there, so such a request waits out the deadline instead.
 
@@ -1223,6 +1225,40 @@ from the URL for "just this slide".
     Safari's extension processes, not the appex. Verified both directions on this machine:
     pluginkit refused the identical appex without the entitlement and lists it with it,
     and the sandboxed-appex app still grabs and serves `/health`.
+
+36. **Writing into Instagram's DOM breaks INSTAGRAM, not the extension — the page's tree
+    is React-hydrated and must be treated as read-only.** Found 2026-08-17 from a user
+    report that read as "Instagram is tripping": skeleton feeds that never rendered,
+    grids misrendering under fast scroll, a post modal that would not respond. The
+    extension looked innocent — every symptom was in *Instagram's own UI* — and the
+    conviction came from a 20-second A/B only a user can run: extension off → flawless,
+    on → broken. The mechanism: `attach()` did `container.appendChild(host)` and set
+    `container.style.position = "relative"` inside React-owned elements; Instagram
+    server-renders and hydrates, foreign nodes mid-hydration are a mismatch (their
+    console shows **minified React error #418** — the fingerprint to grep for), and
+    React's recovery is what shredded the page. It had *worked* on 2026-08-16 —
+    hydration races are timing-dependent, so "verified working yesterday" is no defence.
+
+    The fix is structural, not probabilistic: all buttons live in one
+    `<carabiner-overlay>` off `documentElement` (beside `<body>`, outside anything React
+    hydrates), `position:fixed`, placed over posts by `getBoundingClientRect` geometry —
+    repositioned on scroll (capture:true — Instagram scrolls inner elements)/resize/
+    mutation, rAF-coalesced, never a free-running loop (battery, and it held the test
+    process open forever). Dedup is a Map keyed by container element, which surfaces the
+    recycling trap: a virtualized list reuses DOM nodes for different posts, and a stale
+    element→button mapping downloads the WRONG post. `attach()` rebinds on permalink
+    change; `content.test.js` pins both this and the "never write to the page" invariant
+    (mutation-checked: one re-added `appendChild` fails it).
+
+    Two debugging lessons from the same afternoon, cheaper to reuse than re-earn:
+    - **An SPA keeps orphaned content scripts alive for days.** Every extension reload
+      orphans the previous injection in every open Instagram tab, and those tabs keep
+      running stale code across all in-page navigation. Symptoms reported from long-lived
+      tabs tell you about OLD code; only a fresh tab tells you about current code.
+    - **Statically-declared content scripts are snapshotted at extension load; dynamically
+      `import()`ed modules are re-read per page load** (unpacked install). So a
+      `containers.js` edit goes live on page reload, but a `content.js` edit needs the
+      extension ⟳ — an edit that "didn't take" may just be the half that needs the reload.
 
 ## Dependencies
 
