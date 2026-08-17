@@ -17,9 +17,9 @@
   // an afternoon of debugging that two debug lines would have answered in ten seconds.
   // debug-level, so they are invisible unless the console is set to Verbose.
   console.debug("[carabiner] content script injected");
-  let permalinkFor, selectContainers, createGrabTracker, grabUrlFor;
+  let permalinkFor, permalinkFromHref, selectContainers, createGrabTracker, grabUrlFor;
   try {
-    ({ permalinkFor } = await import(chrome.runtime.getURL("src/shortcode.js")));
+    ({ permalinkFor, permalinkFromHref } = await import(chrome.runtime.getURL("src/shortcode.js")));
     ({ selectContainers } = await import(chrome.runtime.getURL("src/containers.js")));
     ({ createGrabTracker } = await import(chrome.runtime.getURL("src/grabTracker.js")));
     ({ grabUrlFor } = await import(chrome.runtime.getURL("src/slideIndex.js")));
@@ -179,7 +179,7 @@
       e.preventDefault();
       e.stopPropagation();          // do not let the click open the post
       reset();
-      setRing(0.02);                // immediate acknowledgement, before anything downloads
+      setRing(0.02);              // immediate acknowledgement, before anything downloads
       const id = nextId();
       tracker.start(id, { setRing, settle });
       try {
@@ -188,12 +188,23 @@
         // would be stale the moment the user swipes — and baking it into `url` would
         // destroy and recreate the button on every swipe. Reading the container is a
         // query, never a write (gotcha #36).
-        const grabUrl = grabUrlFor(url, { search: location.search, container });
+        // `location.search` is page-global, so it is passed WITH the post the page's own
+        // path names (final review, Finding 1) — grabUrlFor trusts the query string only
+        // when those agree. permalinkFromHref returns null for a feed ("/") or a profile
+        // ("/handle/") path, which is simply "the address bar is not about a post".
+        const grabUrl = grabUrlFor(url, {
+          search: location.search,
+          pagePermalink: permalinkFromHref(location.pathname),
+          container,
+        });
         // Breadcrumb for the one case that silently reverts to the old behaviour: a post
-        // that HAS carousel dots but no single readable active one, i.e. Instagram changed
-        // the markup. Deliberately not logged for ordinary single posts, which have no
-        // dots and for which "no slide index" is simply correct.
-        if (grabUrl === url && container.querySelector('button[aria-label^="Go to slide"]')) {
+        // that HAS an active carousel dot we could not read, i.e. Instagram changed the
+        // markup. Keyed on `aria-current` — language-neutral — and NOT on an English
+        // label: the diagnostic built to announce a lost parse was blind to exactly the
+        // localized case that loses it (final review, Finding 2). Deliberately not logged
+        // for ordinary single posts, which have no dots and for which "no slide index" is
+        // simply correct.
+        if (grabUrl === url && container.querySelector("button[aria-current]")) {
           console.debug("[carabiner] carousel with no readable active slide — grabbing slide 1");
         }
         chrome.runtime.sendMessage({ type: "grab", id, url: grabUrl, browser: detectBrowser() }, (reply) => {

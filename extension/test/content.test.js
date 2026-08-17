@@ -242,6 +242,14 @@ test("the page's own DOM is never written — buttons live in the overlay, not i
   const ctx = await loadContentScript(html);
   const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
 
+  // Final review, Finding 3: the click handler READS the page (the container's dots, and
+  // — since Finding 1 — location.pathname) to resolve the slide. Those reads were outside
+  // this invariant's guarantee while the test never clicked, so a write added inside the
+  // click handler would have sailed past the most expensive invariant in the project.
+  // Clicking here puts them under it.
+  ctx.shadowOf(host).querySelector("button").click();
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });  // disarm the 90s watchdog
+
   const anchor = ctx.document.querySelector("a[href='/p/C1a2b3c4/']");
   assert.equal(anchor.children.length, 0, "container must gain no child elements");
   assert.equal(anchor.getAttribute("style"), null, "container must gain no inline style");
@@ -306,13 +314,46 @@ test("swiping between attach and click changes what is sent — resolution is at
   ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
 });
 
-test("on a permalink page the address bar wins over the dots", async () => {
+/** The post the real captured feed fixture is actually about — its own permalink. */
+const FEED_PERMALINK = "https://www.instagram.com/p/Db-Xe7jDlkM/";
+
+test("on a permalink page for THIS post the address bar wins over the dots", async () => {
   const ctx = await loadContentScript(FEED_CAROUSEL_HTML,
-    { url: "https://www.instagram.com/p/C1a2b3c4/?img_index=4" });
+    { url: "https://www.instagram.com/p/Db-Xe7jDlkM/?img_index=4" });
   const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
   ctx.shadowOf(host).querySelector("button").click();
 
-  assert.match(ctx.sentMessages[0].url, /\?img_index=4$/);
+  assert.equal(ctx.sentMessages[0].url, `${FEED_PERMALINK}?img_index=4`);
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
+});
+
+test("a page URL naming a DIFFERENT post does not leak its slide index into this button", async () => {
+  // Final review, Finding 1, the reachable path: opening a post modal from the feed makes
+  // Instagram push /p/A/?img_index=3, while the containers BEHIND the modal keep their
+  // buttons and the overlay draws them over it. location.search is page-global; the dots
+  // are not. Clicking a button for post B must send B's own slide (1 in this fixture),
+  // never A's 3 — that is the silent wrong-file failure this whole feature exists to end.
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML,
+    { url: "https://www.instagram.com/p/ZZZZZZZZZZ/?img_index=3" });
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+  ctx.shadowOf(host).querySelector("button").click();
+
+  assert.equal(ctx.sentMessages[0].url, `${FEED_PERMALINK}?img_index=1`);
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
+});
+
+test("a non-English carousel still sends the slide the user is looking at", async () => {
+  // Final review, Finding 2: an English-only label parse is a silent revert to the
+  // original slide-1 bug for every localized UI. End-to-end, through the real click path.
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+  ctx.document.querySelector('button[aria-current="step"]').removeAttribute("aria-current");
+  const dutch = ctx.document.querySelector('button[aria-label="Go to slide 3"]');
+  dutch.setAttribute("aria-current", "step");
+  dutch.setAttribute("aria-label", "Ga naar dia 3");
+
+  ctx.shadowOf(host).querySelector("button").click();
+  assert.equal(ctx.sentMessages[0].url, `${FEED_PERMALINK}?img_index=3`);
   ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
 });
 

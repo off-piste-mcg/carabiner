@@ -36,6 +36,34 @@ test("two active dots is no opinion — we do not understand the page", () => {
   assert.equal(slideIndexFromContainer(doc.querySelector("article")), null);
 });
 
+test("the label is read in ANY language — Instagram localizes aria-label", () => {
+  // Final review, Finding 2: requiring the literal English word "slide" meant a Dutch or
+  // Spanish Instagram UI parsed as null, i.e. a silent revert to the original slide-1 bug
+  // for every non-English user. `aria-current="step"` is language-neutral; the label read
+  // must be too, so parse the first integer anywhere in it.
+  const labels = ["Ga naar dia 3", "Ir a la diapositiva 3", "スライド3に移動", "Перейти к слайду 3"];
+  for (const label of labels) {
+    const container = feedContainer();
+    container.querySelector('button[aria-current="step"]').setAttribute("aria-label", label);
+    assert.equal(slideIndexFromContainer(container), 3, `expected 3 from ${JSON.stringify(label)}`);
+  }
+});
+
+test("a 'N of M' label reads N, not M", () => {
+  const container = feedContainer();
+  container.querySelector('button[aria-current="step"]').setAttribute("aria-label", "Go to slide 3 of 4");
+  assert.equal(slideIndexFromContainer(container), 3);
+});
+
+test("a label with no number at all is still no opinion, never slide 1", () => {
+  const container = feedContainer();
+  container.querySelector('button[aria-current="step"]').setAttribute("aria-label", "Volgende");
+  assert.equal(slideIndexFromContainer(container), null);
+  const bare = feedContainer();
+  bare.querySelector('button[aria-current="step"]').removeAttribute("aria-label");
+  assert.equal(slideIndexFromContainer(bare), null);
+});
+
 test("grid tiles have no slide opinion", () => {
   for (const tile of selectContainers(load("grid-thumb.html"))) {
     assert.equal(slideIndexFromContainer(tile), null);
@@ -61,10 +89,44 @@ test("rejects img_index values that are not positive integers", () => {
   }
 });
 
-test("grabUrlFor: the address bar wins over the DOM", () => {
+/** The post the real captured feed fixture is actually about. */
+const FEED_PERMALINK = "https://www.instagram.com/p/Db-Xe7jDlkM/";
+
+test("grabUrlFor: the address bar wins over the DOM — when it is the SAME post", () => {
+  // `pagePermalink` is what the page's own path resolves to. Equal to the container's
+  // permalink ⇒ the address bar is talking about this post ⇒ it wins, as it always has.
   assert.equal(
-    grabUrlFor("https://www.instagram.com/p/C1a2b3c4/", { search: "?img_index=4", container: feedContainer() }),
+    grabUrlFor("https://www.instagram.com/p/C1a2b3c4/", {
+      search: "?img_index=4",
+      pagePermalink: "https://www.instagram.com/p/C1a2b3c4/",
+      container: feedContainer(),
+    }),
     "https://www.instagram.com/p/C1a2b3c4/?img_index=4");
+});
+
+test("grabUrlFor: a page URL naming a DIFFERENT post never lends its slide index", () => {
+  // Final review, Finding 1: opening a post modal pushes /p/A/?img_index=3, but the feed
+  // containers BEHIND the modal keep their buttons. Clicking one used to send B at A's
+  // slide — a silent wrong file. The dots inside B are per-container and correct, so the
+  // right answer here is B's own active dot (slide 1 in the real fixture), never 3.
+  assert.equal(
+    grabUrlFor(FEED_PERMALINK, {
+      search: "?img_index=3",
+      pagePermalink: "https://www.instagram.com/p/AAAAAAAAAA/",
+      container: feedContainer(),
+    }),
+    `${FEED_PERMALINK}?img_index=1`);
+});
+
+test("grabUrlFor: with no page permalink at all the address bar is not trusted", () => {
+  // A feed URL ("/") resolves to no permalink, so nothing corroborates the query string.
+  // Falling through to the container is the safe direction: those dots are per-container.
+  assert.equal(
+    grabUrlFor(FEED_PERMALINK, { search: "?img_index=3", container: feedContainer() }),
+    `${FEED_PERMALINK}?img_index=1`);
+  // …and with no container to fall back on, it is simply "no opinion".
+  assert.equal(
+    grabUrlFor(FEED_PERMALINK, { search: "?img_index=3" }), FEED_PERMALINK);
 });
 
 test("grabUrlFor: falls back to the container when the URL says nothing", () => {
