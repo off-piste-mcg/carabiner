@@ -11,12 +11,20 @@
 // That keeps chrome.* available, at the cost of needing an async IIFE (top-level await
 // needs a real module, and a content script can't be one while using static import).
 (async () => {
+  // console.debug breadcrumbs, deliberately kept: the import failure below is silent by
+  // design ("never throw into the page"), and 2026-08-17 proved that a silent failure
+  // here is indistinguishable from "not injected at all" from outside the extension —
+  // an afternoon of debugging that two debug lines would have answered in ten seconds.
+  // debug-level, so they are invisible unless the console is set to Verbose.
+  console.debug("[carabiner] content script injected");
   let permalinkFor, selectContainers, createGrabTracker;
   try {
     ({ permalinkFor } = await import(chrome.runtime.getURL("src/shortcode.js")));
     ({ selectContainers } = await import(chrome.runtime.getURL("src/containers.js")));
     ({ createGrabTracker } = await import(chrome.runtime.getURL("src/grabTracker.js")));
-  } catch (_) {
+    console.debug("[carabiner] modules loaded");
+  } catch (e) {
+    console.debug("[carabiner] module import failed:", e && e.message);
     return; // no modules, no button — never throw into the page.
   }
 
