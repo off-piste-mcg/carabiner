@@ -44,9 +44,29 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
       "This slide", "All", and Cancel (nothing downloaded, no banner) all correct.
 - [ ] **10. Leave the carousel dialog open for a few minutes**, then answer it. The button
       must not have given up; the app's own 3600s backstop should be the only bound.
-- [ ] **11. Quit Carabiner, then click a button.** It should launch the app and complete.
-      Note what the browser's "Open Carabiner?" prompt looks like, and whether a cold launch
-      beats the 2500ms retry.
+- [ ] **11. Quit Carabiner, then click a button. FAILS as of 2026-08-17 — a real bug, not
+      a missing tick.** With the app closed, clicking a button does not launch it and no
+      "Open Carabiner?" prompt ever appears, so the button silently does nothing. Do not
+      re-derive this from scratch; what is and is not established:
+
+      | Evidence | Confidence |
+      |---|---|
+      | `open carabiner://launch` from a shell launches the app | solid — the scheme registration and the macOS side are fine |
+      | `chrome.tabs.create({url:"carabiner://launch", active:false})` with **no** removal → app launched | n=1 |
+      | the same call with the shipped **1500ms** `tabs.remove` → never launched (rechecked 11s later) | n=1 |
+      | the same at **3000ms** → never launched | n=1 |
+      | page-context `location.href` and a real click on a `carabiner://` link | **discarded — Chrome was not the frontmost app**, which plausibly suppresses the external-protocol dialog |
+
+      Leading hypothesis: `launchApp()`'s `setTimeout(() => chrome.tabs.remove(...), 1500)`
+      cancels a still-pending external-protocol handoff — the created tab sits at
+      `url: ""`, `pendingUrl: "carabiner://launch"`. **Not settled**: every variant ran once,
+      and the two arms differed in more than the timer. Redo the A/B with Chrome focused and
+      several repetitions before writing a fix.
+
+      If it is confirmed, the timer is the wrong shape regardless: cleanup must be tied to
+      the app actually answering (poll `GET /health`) rather than to a bare delay, and note
+      that the **2500ms retry may also be too short** — if the handoff needs longer than
+      that, the worker gives up before the app it just launched is ready.
 
 ## C. Permissions and setup
 
