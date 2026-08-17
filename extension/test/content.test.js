@@ -320,14 +320,24 @@ test("swiping does not rebind the button — the slide index is not baked into t
   const ctx = await loadContentScript(FEED_CAROUSEL_HTML);
   const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
 
+  // The `aria-current` attribute change alone does NOT trigger a rescan — content.js's
+  // MutationObserver is `{ childList: true, subtree: true }`, which ignores attribute
+  // mutations entirely. Without a real childList mutation this test would pass no matter
+  // what attach()/the dedup key did, because scan() would simply never re-run. So: change
+  // the active dot (what a real swipe changes), AND separately force the rescan the same
+  // way "re-running the scan does not double-inject" above does — append a throwaway node
+  // under body, which the observer's childList/subtree does see.
   ctx.document.querySelector('button[aria-current="step"]').removeAttribute("aria-current");
   ctx.document.querySelector('button[aria-label="Go to slide 3"]').setAttribute("aria-current", "step");
-  // That DOM change triggers content.js's own MutationObserver-driven rescan; give it a
-  // few frames to run before counting.
+  ctx.document.body.appendChild(ctx.document.createComment("unrelated mutation"));
+  // Give the coalesced (requestAnimationFrame-scheduled) rescan a chance to run before
+  // counting.
   await new Promise((r) => setTimeout(r, 100));
 
   assert.equal(ctx.document.querySelectorAll("[data-carabiner-host]").length, 1,
                "a swipe must not create a second button");
   assert.equal(ctx.document.querySelector("[data-carabiner-host]"), host,
-               "and must not replace the existing one");
+               "and must not replace the existing one — if the slide index were baked into " +
+               "the dedup key, this rescan would compute a different url, see " +
+               "existing.url !== url, and destroy/recreate the button");
 });
