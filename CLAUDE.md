@@ -357,8 +357,28 @@ while the app release is newest — publish future `deps-*` releases as **pre-re
 they will steal the link and send teammates to a release with no DMG in it.
 
 **The browser extension: WORKING in both browsers, not yet shipped (verified 2026-08-16,
-branch `feat/browser-extension`).** `extension/`'s offline suite is **64/64** (`node
---test` from `extension/`). What a human has actually verified:
+branch `feat/browser-extension`).** `extension/`'s offline suite is **89/89** (`node
+--test` from `extension/`). Two notes on that number, because it has been wrong here
+before: the figure recorded until 2026-08-17 was 64, and the real count at that moment was
+67 — an implementer measured it, so trust `node --test` over this line. The jump to 89 is
+the carousel slide-index work (below).
+
+**The button grabs the slide you are looking at, since 2026-08-17.** It did not before, and
+the failure was the bad kind: swipe a feed carousel to slide 2, answer the dialog with
+"This slide", and slide **1** landed in `~/Downloads` behind a green tick and a banner.
+`shortcode.js` canonicalises to a bare `/p/CODE/`, and gotcha #15 says an absent
+`img_index` means slide 1 — so "this slide" always meant the first one. `slideIndex.js`
+now reads Instagram's own `aria-current="step"` carousel dot (language-neutral; the label
+is parsed for its first integer, since `aria-label` is localized) and `content.js` resolves
+it **at click time** — `url` is closed over at attach and the dedup map rebinds on `url`
+change, so an index resolved at attach would be stale after a swipe and one baked into
+`url` would recreate the button on every swipe. The page URL wins only when it names *that
+same post*: `location.search` is page-global while a button belongs to one container, and
+with a post modal open over the feed the two genuinely diverge. Design:
+`docs/superpowers/specs/2026-08-17-carousel-slide-index-design.md`. **Not yet confirmed in
+a real browser** — jsdom only.
+
+What a human has actually verified:
 
 - **Verified 2026-08-14/16 (Wisse, real browsers, logged-in Instagram):** buttons render
   on the feed, profile grids and post pages in **both Chrome and Safari**; real grabs
