@@ -17,11 +17,12 @@
   // an afternoon of debugging that two debug lines would have answered in ten seconds.
   // debug-level, so they are invisible unless the console is set to Verbose.
   console.debug("[carabiner] content script injected");
-  let permalinkFor, selectContainers, createGrabTracker;
+  let permalinkFor, selectContainers, createGrabTracker, grabUrlFor;
   try {
     ({ permalinkFor } = await import(chrome.runtime.getURL("src/shortcode.js")));
     ({ selectContainers } = await import(chrome.runtime.getURL("src/containers.js")));
     ({ createGrabTracker } = await import(chrome.runtime.getURL("src/grabTracker.js")));
+    ({ grabUrlFor } = await import(chrome.runtime.getURL("src/slideIndex.js")));
     console.debug("[carabiner] modules loaded");
   } catch (e) {
     console.debug("[carabiner] module import failed:", e && e.message);
@@ -182,7 +183,20 @@
       const id = nextId();
       tracker.start(id, { setRing, settle });
       try {
-        chrome.runtime.sendMessage({ type: "grab", id, url, browser: detectBrowser() }, (reply) => {
+        // Resolved HERE, not in makeButton: `url` is closed over at attach time and the
+        // buttons map rebinds only when it changes, so a slide index computed at attach
+        // would be stale the moment the user swipes — and baking it into `url` would
+        // destroy and recreate the button on every swipe. Reading the container is a
+        // query, never a write (gotcha #36).
+        const grabUrl = grabUrlFor(url, { search: location.search, container });
+        // Breadcrumb for the one case that silently reverts to the old behaviour: a post
+        // that HAS carousel dots but no single readable active one, i.e. Instagram changed
+        // the markup. Deliberately not logged for ordinary single posts, which have no
+        // dots and for which "no slide index" is simply correct.
+        if (grabUrl === url && container.querySelector('button[aria-label^="Go to slide"]')) {
+          console.debug("[carabiner] carousel with no readable active slide — grabbing slide 1");
+        }
+        chrome.runtime.sendMessage({ type: "grab", id, url: grabUrl, browser: detectBrowser() }, (reply) => {
           // Fix round 1, Finding 3: a worker that failed to register at all — the exact
           // Safari importScripts risk this extension takes on — used to leave this
           // callback firing with `reply` undefined and nothing checked, so the button

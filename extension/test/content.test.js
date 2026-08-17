@@ -60,9 +60,9 @@ let previousWindow = null;
  * Loads a fresh copy of content.js against a fresh jsdom document, with jsdom installed
  * as Node's globals and `chrome` mocked. Returns handles for driving and inspecting it.
  */
-async function loadContentScript(html) {
+async function loadContentScript(html, { url = "https://www.instagram.com/" } = {}) {
   previousWindow?.close();
-  const dom = new JSDOM(html, { url: "https://www.instagram.com/", pretendToBeVisual: true });
+  const dom = new JSDOM(html, { url, pretendToBeVisual: true });
   const { window } = dom;
   previousWindow = window;
 
@@ -82,7 +82,7 @@ async function loadContentScript(html) {
   // "window" itself is on the list since the overlay refactor: content.js registers
   // scroll/resize listeners and reads window.innerWidth/innerHeight for placement — in a
   // real content script `window` always exists; this only mirrors that.
-  for (const key of ["window", "document", "MutationObserver", "requestAnimationFrame", "getComputedStyle", "Node"]) {
+  for (const key of ["window", "document", "MutationObserver", "requestAnimationFrame", "getComputedStyle", "Node", "location"]) {
     globalThis[key] = window[key];
   }
   // `navigator` needs the same non-configurable-getter workaround as `crypto` (Node also
@@ -113,8 +113,8 @@ async function loadContentScript(html) {
   // a fresh grabTracker) rather than Node's ESM cache handing back the first run's — the
   // shipped file has no query-string awareness of its own; this is purely a test-harness
   // trick to get one execution per test.
-  const url = pathToFileURL(path.join(srcDir, "content.js")).href + `?t=${Date.now()}_${Math.random()}`;
-  await import(url);
+  const moduleUrl = pathToFileURL(path.join(srcDir, "content.js")).href + `?t=${Date.now()}_${Math.random()}`;
+  await import(moduleUrl);
 
   return {
     window,
@@ -275,4 +275,59 @@ test("a recycled container element (same node, new href) gets a fresh button for
   });
   assert.equal(ctx.document.querySelectorAll("[data-carabiner-host]").length, 1,
     "rebinding must not leave the old button behind");
+});
+
+/** The real captured feed carousel — an <article> with four dots, slide 1 active. */
+const FEED_CAROUSEL_HTML = readFileSync(
+  new URL("./fixtures/feed-post.html", import.meta.url), "utf8");
+
+test("a click sends the slide the user is looking at, not always slide 1", async () => {
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+  ctx.shadowOf(host).querySelector("button").click();
+
+  assert.equal(ctx.sentMessages.length, 1);
+  assert.match(ctx.sentMessages[0].url, /\/p\/[\w-]+\/\?img_index=1$/);
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
+});
+
+test("swiping between attach and click changes what is sent — resolution is at CLICK time", async () => {
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  // Simulate the user swiping to slide 3 AFTER the button was attached. This is the exact
+  // sequence that shipped broken: `url` is closed over in makeButton, so a resolution done
+  // at attach time cannot see this.
+  ctx.document.querySelector('button[aria-current="step"]').removeAttribute("aria-current");
+  ctx.document.querySelector('button[aria-label="Go to slide 3"]').setAttribute("aria-current", "step");
+
+  ctx.shadowOf(host).querySelector("button").click();
+  assert.match(ctx.sentMessages[0].url, /\/p\/[\w-]+\/\?img_index=3$/);
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
+});
+
+test("on a permalink page the address bar wins over the dots", async () => {
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML,
+    { url: "https://www.instagram.com/p/C1a2b3c4/?img_index=4" });
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+  ctx.shadowOf(host).querySelector("button").click();
+
+  assert.match(ctx.sentMessages[0].url, /\?img_index=4$/);
+  ctx.deliver({ type: "done", id: ctx.sentMessages[0].id, result: "ok" });
+});
+
+test("swiping does not rebind the button — the slide index is not baked into the dedup key", async () => {
+  const ctx = await loadContentScript(FEED_CAROUSEL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  ctx.document.querySelector('button[aria-current="step"]').removeAttribute("aria-current");
+  ctx.document.querySelector('button[aria-label="Go to slide 3"]').setAttribute("aria-current", "step");
+  // That DOM change triggers content.js's own MutationObserver-driven rescan; give it a
+  // few frames to run before counting.
+  await new Promise((r) => setTimeout(r, 100));
+
+  assert.equal(ctx.document.querySelectorAll("[data-carabiner-host]").length, 1,
+               "a swipe must not create a second button");
+  assert.equal(ctx.document.querySelector("[data-carabiner-host]"), host,
+               "and must not replace the existing one");
 });
