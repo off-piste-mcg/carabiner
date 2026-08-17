@@ -1,9 +1,11 @@
 # Browser extension — manual verification checklist
 
-**Date:** 2026-08-14 · **Updated:** 2026-08-16
-**Status:** 11 of 21 done — the extension is WORKING in both browsers (button, grabs,
-mixed carousel, Cancel). Open: 10-11, the permissions-window checks (12-17), and the
-Chrome Web Store steps (18-19).
+**Date:** 2026-08-14 · **Updated:** 2026-08-17
+**Status:** 16 of 21 done — the extension is WORKING in both browsers (button, grabs,
+mixed carousel, Cancel), and the Setup & Permissions window is verified except for the
+fallback. Open: 10-11 (button patience, cold launch), 17 (the FDA-denied Safari→Chrome
+fallback, which costs an FDA revoke and an OS-forced relaunch), and 19 (the Chrome Web
+Store listing).
 
 Everything on this branch that a machine can check has been checked: 227 Swift tests,
 64 JS tests, both shell suites, and per-task reviews with adversarial verification.
@@ -48,29 +50,57 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
 
 ## C. Permissions and setup
 
-- [ ] **12. The Setup & Permissions window with 5 rows** — layout, no clipped text.
-- [ ] **13. The Full Disk Access row.** Grant it, and answer the question nobody has tested:
-      **does the row go green without quitting and relaunching Carabiner?** If it does not,
-      the row will read red immediately after the user grants it, and it needs a "quit and
-      reopen Carabiner" note. This is the sharpest open question in this section.
-- [ ] **14. The deep link** `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`
-      opens the right pane on this macOS version.
-- [ ] **15. The Safari row's Allow** actually opens Safari's extension settings
-      (`SFSafariApplication.showPreferencesForExtension`) — only ever verified to compile.
-- [ ] **16. `lastSeen` survives a restart.** Get a browser row green, quit and reopen
-      Carabiner, confirm it is still green.
+- [x] **12. The Setup & Permissions window with 5 rows** — done 2026-08-17. Five rows plus
+      the hotkey block render with no clipped text at the default window size.
+- [x] **13. The Full Disk Access row.** Done 2026-08-17, and the answer is better than the
+      question feared. A fresh grant does **not** reach the running process — but macOS
+      enforces that itself: toggling Carabiner on offered **only "Quit & Reopen"**, with no
+      "Later". After the OS-forced relaunch (pid 87789 → 89252) the row read green. **No
+      "quit and reopen" note is needed** — macOS closes the hole for us. The green was then
+      cross-checked against gotcha #28's false-green trap with a real grab driven through
+      `POST /grab` with `browser: safari`: 2 files, `::progress:from:@off__piste`, and a
+      single clean stage sequence, so no Chrome fallback fired (`shouldRetryWithChrome`
+      only runs on a *failed* Safari attempt, which would have replayed the stages and
+      re-shown the dialog).
+- [x] **14. The deep link** `x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles`
+      — done 2026-08-17. Opening it leaves System Settings showing a window whose title is
+      literally `Full Disk Access`, so it lands on the exact pane, not the Privacy root.
+- [x] **15. The Safari row's Allow** — done 2026-08-17, but it **failed the first time and
+      the failure was invisible**, which is the part worth keeping. Safari's settings simply
+      never appeared (confirmed via System Events: Safari had one window, "Instagram"), with
+      no error anywhere, because the call passed no completion handler and threw its
+      `Error?` away. Instrumented with one (`OnboardingViewModel.installBrowserButton`), it
+      has since reported **success 3 for 3** and Safari's Extensions pane opens with the
+      extension selected. Cause of the first failure unproven; the reinstall +
+      `lsregister -f` in between is the only candidate. The identifier is correct and now
+      lives in `OnboardingViewModel.safariExtensionIdentifier`, coupled by nothing but a
+      comment to the appex's `PRODUCT_BUNDLE_IDENTIFIER`.
+      **Noted, not chased:** Safari's Installed list shows **two identical "Carabiner"
+      entries**, both enabled, identical panes — while `pluginkit -m -A -v` reports exactly
+      **1 plug-in** and only one appex exists on disk. So it is Safari-side state, not a
+      second registration. Prime suspect is the "Share across devices" checkbox (iCloud-
+      synced extension records); second is a stale record from the `/Applications` copy
+      deleted the same day. Not a blocker — the extension works — but check this before
+      concluding a user has installed it twice.
+- [x] **16. `lastSeen` survives a restart.** Done 2026-08-17, isolated so a fresh check-in
+      could not fake it: the worker pings `/health` only on `onInstalled`/`onStartup`, so an
+      app restart cannot trigger one, and the persisted timestamps were byte-identical
+      before and after (`chrome` 09:39:22Z, `safari` 10:07:51Z). Row still green after the
+      restart, so the value came off disk.
 - [ ] **17. The Safari→Chrome cookie fallback end to end:** with FDA denied, a Safari grab
       should silently succeed using Chrome's login and the banner should say so
       ("used Chrome's login"). Watch whether the ring visibly restarts mid-grab.
 
 ## D. Before the Chrome Web Store listing
 
-- [ ] **18. `chrome://policy`** — your Chrome is managed by offpiste.agency. If it blocks
-      extensions, an unlisted Web Store listing will not help the team either, and the
-      extension would need allowlisting centrally. **Check this before paying the $5.**
+- [x] **18. `chrome://policy`** — checked and clean: no extension restrictions, so the $5
+      listing is unblocked. (Verified earlier; this box was never ticked here.)
 - [ ] **19. Publish unlisted, then replace `PLACEHOLDER_ID`** in
       `app/Carabiner/Onboarding/OnboardingViewModel.swift`. Until then the Chrome row's
-      Allow button opens a dead link.
+      Allow button opens a dead link — and observed 2026-08-17, "dead" is gentler and
+      worse than expected: `chromewebstore.google.com/detail/PLACEHOLDER_ID` does not 404,
+      it **silently redirects to the Web Store home page**, so a user who clicks Allow
+      lands on "Welcome to the Chrome Web Store" with no hint of what went wrong.
 
 ## E. One-off checks worth doing once
 

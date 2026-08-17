@@ -282,16 +282,22 @@ ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
 >
 > **Still open before this ships**, from
 > `docs/superpowers/plans/2026-08-14-browser-extension-manual-verification.md`
-> (11 of 21 done, each tick dated):
-> items 10-11 (dialog-left-open patience; cold-launch on click), 12-17 (the Setup &
-> Permissions window checks — sharpest: does a fresh Full Disk Access grant take effect
-> without relaunching Carabiner? nobody knows), and 18-19 (the Chrome Web Store listing —
-> **check `chrome://policy` before paying the $5**; this Chrome profile is managed by
-> offpiste.agency, and `OnboardingViewModel.chromeWebStoreURL` is still `PLACEHOLDER_ID`).
+> (16 of 21 done, each tick dated):
+> items 10-11 (dialog-left-open patience; cold-launch on click), 17 (the FDA-denied
+> Safari→Chrome cookie fallback, which costs an FDA revoke plus the OS-forced relaunch),
+> and 19 (the Chrome Web Store listing — `chrome://policy` is clean, so the $5 is
+> unblocked; `OnboardingViewModel.chromeWebStoreURL` is still `PLACEHOLDER_ID`, which
+> redirects to the Web Store home page rather than 404ing).
+>
+> The **Setup & Permissions window is verified** as of 2026-08-17 (items 12-16), including
+> the question that had been the sharpest unknown — a fresh Full Disk Access grant does not
+> reach the running process, but macOS forces "Quit & Reopen" as part of granting, so no
+> "quit and reopen" note is needed. That pass also caught a real silent failure in the
+> Safari row's Allow. Both are gotcha #37.
 >
 > The design is `docs/superpowers/specs/2026-08-12-browser-extension-design.md`; the
 > implementation plan is `docs/superpowers/plans/2026-08-12-browser-extension.md`. What
-> that work earned the hard way is gotchas #28-#36 plus "Known rough edges" below.
+> that work earned the hard way is gotchas #28-#37 plus "Known rough edges" below.
 
 Phase 1 of the app is **done and merged** (see the spec's phasing section, corrected after
 the fact). Phase 2, bundling the binaries, is **partially done**:
@@ -364,21 +370,26 @@ branch `feat/browser-extension`).** `extension/`'s offline suite is **64/64** (`
   Chrome doesn't (gotcha #29), Safari cookies need Full Disk Access (gotcha #28), the
   parser is fixed against captured real markup (gotcha #31), and the hotkey path still
   works after the shared-grab-path refactor.
-- **NOT yet verified:** the checklist's items 10-17 — dialog-left-open patience,
-  cold-launching the app from a button click, and the whole Setup & Permissions window
-  section (sharpest: whether a fresh FDA grant registers without relaunching Carabiner,
-  and the Safari→Chrome cookie fallback end to end).
+- **Verified 2026-08-17 (Wisse + measurement, items 12-16):** the whole Setup & Permissions
+  window except the fallback — 5-row layout, the FDA row and its grant flow, the
+  `Privacy_AllFiles` deep link, the Safari row's Allow (which failed silently first: gotcha
+  #37), and `lastSeen` surviving an app restart. The FDA row's green was cross-checked with
+  a real Safari-cookie grab, not trusted.
+- **NOT yet verified:** items 10-11 (dialog-left-open patience, cold-launching the app from
+  a button click) and 17 (the Safari→Chrome cookie fallback end to end, which needs FDA
+  revoked and therefore another OS-forced relaunch).
 
 What is left before shipping, needing a human with a Google account:
 
 1. **The Chrome Web Store listing does not exist.** `OnboardingViewModel.chromeWebStoreURL`
-   is still `…/detail/PLACEHOLDER_ID`, so the Chrome row's Allow button opens a dead URL
-   today. **Check `chrome://policy` first** (managed profile). Publishing is a $5 one-off
-   developer account, an **unlisted** listing, and a privacy justification that says
+   is still `…/detail/PLACEHOLDER_ID`, so the Chrome row's Allow button opens the Web Store
+   *home page* today (it redirects rather than 404ing, which is worse — it looks like
+   nothing went wrong). `chrome://policy` is clean, so this is unblocked. Publishing is a $5
+   one-off developer account, an **unlisted** listing, and a privacy justification that says
    plainly what the `127.0.0.1` host permission is for (handing the post URL to the
    companion app; the extension downloads nothing and collects nothing). Then the real ID
    replaces the placeholder and the app is rebuilt.
-2. **The remaining checklist items (10-17)** in the manual-verification doc.
+2. **The remaining checklist items (10-11, 17)** in the manual-verification doc.
 
 ### Known rough edges in the extension work (deferred, not forgotten)
 
@@ -1259,6 +1270,50 @@ from the URL for "just this slide".
       `import()`ed modules are re-read per page load** (unpacked install). So a
       `containers.js` edit goes live on page reload, but a `content.js` edit needs the
       extension ⟳ — an edit that "didn't take" may just be the half that needs the reload.
+
+37. **macOS "grant Full Disk Access" is not a permission the app can be caught mid-way
+    through — macOS forces the relaunch itself. And the one API in this window that CAN
+    fail silently is the Safari one, because its error is optional and we were discarding
+    it.** Both settled 2026-08-17, closing the sharpest open question in the onboarding
+    window.
+
+    - **FDA (checklist item 13).** The fear was that a fresh grant would not reach the
+      already-running process, leaving the row red right after the user turns it on and
+      needing a "quit and reopen Carabiner" note. The grant indeed does not reach a running
+      process — but the toggle offered **only "Quit & Reopen"**, no "Later", so macOS
+      performs the relaunch as part of granting. After it (pid 87789 → 89252) the row read
+      green. **No note is needed.** The green was then checked against gotcha #28's
+      false-green trap rather than trusted: a real `POST /grab` with `browser: safari`
+      landed 2 files with `::progress:from:@off__piste` in one clean stage sequence, and
+      since `shouldRetryWithChrome` only fires on a *failed* Safari attempt — which would
+      replay the stages and re-show the carousel dialog — the absence of a replay is the
+      proof no Chrome fallback happened.
+    - **`SFSafariApplication.showPreferencesForExtension` (item 15).** Its signature is
+      `(withIdentifier:completionHandler:)` with the handler defaulting to nil, so the
+      obvious one-argument call **throws the only error channel away**. It failed on its
+      first real run — Safari's settings never appeared, System Events showed Safari with
+      one window ("Instagram"), nothing logged anywhere — and looked exactly like a broken
+      extension. With a handler attached it reports success 3 for 3. Never call this API
+      without the handler; a row's Allow button that silently does nothing is the worst
+      shape this window can fail in. The identifier it takes must equal the appex's
+      `PRODUCT_BUNDLE_IDENTIFIER` in `app/project.yml`, coupled by nothing but a comment.
+    - **Two other things seen here, recorded so they are not re-investigated blind.**
+      Safari's Installed list can show **two identical enabled "Carabiner" entries** while
+      `pluginkit -m -A -v` reports exactly one plug-in and one appex exists on disk — so it
+      is Safari-side state, not a double registration (prime suspect: the "Share across
+      devices" checkbox syncing extension records via iCloud). And
+      `chromewebstore.google.com/detail/PLACEHOLDER_ID` does **not** 404 — it redirects to
+      the Web Store home page, so the unreplaced placeholder presents as a cheerful
+      "Welcome to the Chrome Web Store" rather than an error.
+
+    Two instruments from this session worth reusing, since both replaced a question to the
+    user with a measurement: System Settings' deep links are verifiable from a shell —
+    `open "x-apple.systempreferences:…?Privacy_AllFiles"` then read the window title via
+    System Events, which returns literally `Full Disk Access` (item 14, no human needed).
+    And `lastSeen` persistence is only honestly testable once you know the extension pings
+    `/health` **solely** on `onInstalled`/`onStartup`: an app restart cannot trigger a
+    check-in, so identical timestamps either side of one prove the green row came off disk
+    (item 16) rather than from a fresh ping.
 
 ## Dependencies
 

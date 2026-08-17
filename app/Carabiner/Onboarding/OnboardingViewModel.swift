@@ -23,6 +23,11 @@ final class OnboardingViewModel: ObservableObject {
     /// real ID once the listing exists (Task 12).
     static let chromeWebStoreURL = "https://chromewebstore.google.com/detail/PLACEHOLDER_ID"
 
+    /// Must equal the appex's `PRODUCT_BUNDLE_IDENTIFIER` in `app/project.yml` — the two are
+    /// coupled with nothing to enforce it, and a mismatch makes the Safari Allow button do
+    /// nothing at all rather than fail loudly.
+    static let safariExtensionIdentifier = "com.offpiste.carabiner.SafariExtension"
+
     private func isInstalled(_ bundleId: String) -> Bool {
         NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) != nil
     }
@@ -37,8 +42,21 @@ final class OnboardingViewModel: ObservableObject {
             NSWorkspace.shared.open(URL(string: Self.chromeWebStoreURL)!)
         }
         if isInstalled("com.apple.Safari") {
+            // The completion handler is not optional politeness: verified 2026-08-17, this
+            // call can fail and do NOTHING visible — no Safari window, no error anywhere —
+            // and without the handler its `Error?` is thrown away, so the row's Allow
+            // becomes a button that silently does nothing. Log it; a silent failure here
+            // is indistinguishable from a broken extension.
             SFSafariApplication.showPreferencesForExtension(
-                withIdentifier: "com.offpiste.carabiner.SafariExtension")
+                withIdentifier: Self.safariExtensionIdentifier) { error in
+                if let error {
+                    NSLog("Carabiner: showPreferencesForExtension(%@) failed: %@",
+                          Self.safariExtensionIdentifier, error.localizedDescription)
+                } else {
+                    NSLog("Carabiner: showPreferencesForExtension(%@) reported success",
+                          Self.safariExtensionIdentifier)
+                }
+            }
         }
     }
 
