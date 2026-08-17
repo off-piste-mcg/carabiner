@@ -96,6 +96,14 @@ grabUrlFor(permalink, { search, container }) -> string
   when both decline. It appends `?img_index=N` — the same shape Instagram itself writes,
   and the same shape the app already parses.
 
+  Two details that must not be left to the implementer's judgement. **It appends even when
+  N is 1**: "we know it is slide 1" and "we have no idea" are different states, and
+  collapsing them would make the one case we can verify indistinguishable from the fallback
+  — it also costs nothing, since gotcha #21's probe skip only applies from `img_index` ≥ 2,
+  so a `1` behaves exactly as the bare URL does today. And the permalink it receives is
+  always the canonical, query-less form produced by `permalinkFromHref`, so composition is
+  a plain append with `?`, never a merge into an existing query string.
+
 `content.js`'s click handler becomes `grabUrlFor(url, { search: location.search, container })`
 and sends the result. Everything else is untouched: the buttons map keeps keying on the
 **bare** permalink, so a swipe changes what a click *sends* without changing what the map
@@ -123,6 +131,9 @@ Against the real fixture, never a hand-written one:
 6. Junk in `img_index` (`0`, `-2`, `abc`, absent) → `null`, and nothing throws.
 7. The dedup key is unaffected by the slide index — pinning that we did not bake it into
    `url`.
+8. A container whose active dot is slide 1 produces `?img_index=1`, not a bare permalink —
+   pinning the "known 1 is not the same as unknown" rule above, which is otherwise the
+   easiest thing in this design to quietly optimise away.
 
 **Mutation-check the guard, do not trust it** (gotcha #34): revert the click-time
 resolution to attach-time and confirm a test actually goes red, rather than assuming it
