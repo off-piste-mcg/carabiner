@@ -113,3 +113,24 @@ test("a non-post anchor (profile, hashtag) is never selected as a container", ()
   ).window.document;
   assert.equal(selectContainers(doc).length, 0);
 });
+
+test("nothing inside a [role=dialog] is a container — the post modal owns its own chrome", () => {
+  // Measured live 2026-08-17 (profile grid → click a tile): Instagram wraps the post
+  // MODAL's whole content in an <article> that spans essentially the viewport
+  // (1600×859 of 1728×907 measured), so a button at that article's top-right landed at
+  // the top-right of the SCREEN, beside Instagram's own close X (ours 1624,32; the X
+  // 1489,23) — and the user could not close the post. The modal needs no button anyway:
+  // opening it rewrites the tab URL to the permalink, which is the hotkey's case.
+  // The grid tiles OUTSIDE the dialog must keep their buttons — that is the second half
+  // of this test, because the fix is a filter, not a page-level bail-out.
+  const doc = new JSDOM(`<!doctype html><body>
+    <a href="/liverpoolfc/p/Db1111111/">tile behind the modal</a>
+    <div role="dialog">
+      <article><a href="/p/Db2222222/">the open post</a></article>
+    </div>
+  </body>`).window.document;
+  const containers = selectContainers(doc);
+  assert.equal(containers.length, 1);
+  assert.equal(containers[0].tagName, "A");
+  assert.equal(containers[0].getAttribute("href"), "/liverpoolfc/p/Db1111111/");
+});
