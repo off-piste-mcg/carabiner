@@ -34,11 +34,8 @@
   // (only a simplified mark would), it just stops it reading as a smudge. The ring shares
   // this size, so it grows with it.
   const SIZE = 32;
-  // Marks the button's own host element, not the post container (fix round 1, Finding
-  // 5). A one-time mark on the container survives even after a re-render (React et al.)
-  // silently drops our host node as an unrecognised child, permanently hiding the button
-  // on a post that still looks "already handled". Checking for a LIVE child with this
-  // mark instead means a removed button gets re-attached on the next scan.
+  // Kept on each overlay host purely as an identifying mark (tests and debugging query
+  // it). Dedup no longer reads it — that is the `buttons` Map's job now.
   const HOST_MARK = "data-carabiner-host";
 
   // The rest state is the Carabiner mark, not a generic download arrow — same silhouette
@@ -84,11 +81,43 @@
       || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
 
+  // ------------------------------------------------------------------------------
+  // Placement: an OVERLAY, never Instagram's own DOM. Proven the hard way 2026-08-17.
+  //
+  // The first shipped version did `container.appendChild(host)` plus
+  // `container.style.position = "relative"` — writes INSIDE the React-owned tree.
+  // Instagram server-renders and hydrates; a foreign child appearing mid-hydration is a
+  // hydration mismatch (their console shows minified React error #418), and the
+  // user-visible result was Instagram itself breaking: skeleton feeds that never
+  // rendered, grids misrendering on fast scroll, a post modal that would not respond.
+  // A/B-confirmed by the user: extension off → Instagram flawless; on → broken.
+  //
+  // So the page's DOM is now READ-ONLY to this script, structurally: every button lives
+  // in one <carabiner-overlay> element appended to documentElement (NOT body — beside
+  // Instagram's app root, outside anything React hydrates), position:fixed, and is
+  // placed over its post by geometry from getBoundingClientRect, re-checked every
+  // animation frame while any button exists. The frame loop doubles as the lifecycle:
+  // a container React re-rendered away is disconnected, so its button is removed on the
+  // next frame, and the next mutation-driven scan re-attaches to the replacement — the
+  // same self-healing the old live-child check bought, without living in their tree.
+  // ------------------------------------------------------------------------------
+  const buttons = new Map(); // container element -> { host, url, place }
+  let overlay = null;
+  function overlayRoot() {
+    if (overlay && overlay.isConnected) return overlay;
+    overlay = document.createElement("carabiner-overlay");
+    overlay.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;z-index:2147483000;";
+    document.documentElement.appendChild(overlay);
+    return overlay;
+  }
+
   // Shadow DOM so Instagram's CSS cannot reach our button and ours cannot leak into the
   // page. Without it, one Instagram style change silently reshapes the button.
-  function makeButton(url) {
+  function makeButton(url, container) {
     const host = document.createElement("div");
-    host.style.cssText = "position:absolute;top:8px;right:8px;z-index:9999;";
+    // left/top stay 0; place() moves the host with a transform, the cheapest style
+    // write there is. pointer-events:auto because the overlay parent is 0×0.
+    host.style.cssText = "position:fixed;left:0;top:0;z-index:2147483000;pointer-events:auto;display:none;";
     const root = host.attachShadow({ mode: "closed" });
     root.innerHTML = `
       <style>
@@ -175,8 +204,60 @@
       }
     });
 
-    return host;
+    // place() is the ONLY thing that positions the button: top-right of the container's
+    // current viewport rect, hidden while the container is offscreen, degenerate
+    // (React's zero-size skeletons), or too small to carry a button at all. Writes only
+    // when the position actually changed, so a still page costs two rect reads and no
+    // style work per frame per button.
+    let lastX = null, lastY = null, lastShown = false;
+    const place = () => {
+      const r = container.getBoundingClientRect();
+      const shown = r.width >= SIZE + 16 && r.height >= SIZE + 16
+        && r.bottom > 0 && r.top < window.innerHeight
+        && r.right > 0 && r.left < window.innerWidth;
+      if (shown !== lastShown) { host.style.display = shown ? "" : "none"; lastShown = shown; }
+      if (!shown) return;
+      const x = Math.round(r.right - SIZE - 8), y = Math.round(r.top + 8);
+      if (x !== lastX || y !== lastY) {
+        host.style.transform = `translate(${x}px,${y}px)`;
+        lastX = x; lastY = y;
+      }
+    };
+
+    return { host, place };
   }
+
+  // Reposition every live button and reap the ones whose container React re-rendered
+  // away (disconnected element → remove ours and the Map entry; the next mutation-driven
+  // scan re-attaches to the replacement). Deliberately NOT a free-running rAF loop:
+  // a standing loop burns battery on a still page and — measured — holds the test
+  // process open forever. Instead this is coalesced one-shot work, driven by the three
+  // things that can actually move a post: scrolling (capture:true, because Instagram
+  // scrolls inner elements, not always the window), a resize, and DOM mutations (which
+  // already drive scan()). A pure CSS animation with no DOM traffic could drift a
+  // button between events; Instagram's layout moves are not that, and stillness costs
+  // nothing this way.
+  function reapAndPlace() {
+    for (const [container, entry] of buttons) {
+      if (!container.isConnected) {
+        entry.host.remove();
+        buttons.delete(container);
+        continue;
+      }
+      entry.place();
+    }
+  }
+  let placeScheduled = false;
+  function schedulePlace() {
+    if (placeScheduled) return;
+    placeScheduled = true;
+    requestAnimationFrame(() => {
+      placeScheduled = false;
+      reapAndPlace();
+    });
+  }
+  window.addEventListener("scroll", schedulePlace, { capture: true, passive: true });
+  window.addEventListener("resize", schedulePlace, { passive: true });
 
   // detectBrowser() lives in browser.js now, shared with worker.js (Finding 4, final
   // review) — manifest.json lists it immediately before this file in the same
@@ -192,15 +273,28 @@
   });
 
   function attach(container) {
-    // A live-child check, not a one-time mark on the container (fix round 1, Finding 5)
-    // — see HOST_MARK's own comment for why.
-    if (container.querySelector(`:scope > [${HOST_MARK}]`)) return;
+    // NEVER writes to `container` — see the placement comment above makeButton. The
+    // page's DOM is read-only to this script.
     const url = permalinkFor(container);
+    const existing = buttons.get(container);
+    if (existing) {
+      if (!url || existing.url !== url) {
+        // A virtualized list can RECYCLE a DOM node for a different post — same element,
+        // new href. A stale mapping here would download the wrong post, which is the
+        // worst bug this extension could have. Drop the button; re-attach below if the
+        // element still resolves.
+        existing.host.remove();
+        buttons.delete(container);
+      } else {
+        return; // mapped, same post — nothing to do
+      }
+    }
     if (!url) return;                       // no shortcode, no button. Never throw.
-    if (getComputedStyle(container).position === "static") container.style.position = "relative";
-    const host = makeButton(url);
+    const { host, place } = makeButton(url, container);
     host.setAttribute(HOST_MARK, "1");
-    container.appendChild(host);
+    overlayRoot().appendChild(host);
+    buttons.set(container, { host, url, place });
+    place();
   }
 
   function scan() {
@@ -214,10 +308,10 @@
 
   // Coalesced to at most one scan per animation frame (fix round 1, Finding 4).
   // Instagram's feed mutates constantly, and scan() itself does a whole-document
-  // querySelectorAll plus a getComputedStyle per candidate — running it synchronously on
-  // every mutation batch was wasteful on its own, and self-amplifying: `attach`'s own
-  // `container.appendChild(host)` is itself a childList mutation that would otherwise
-  // schedule yet another full scan.
+  // querySelectorAll per batch — running it synchronously on every mutation batch was
+  // wasteful. (Our own DOM writes all land inside the overlay now, and the observer
+  // watches body, which does not contain the overlay — so a scan can no longer
+  // schedule another scan, removing the old self-amplification risk entirely.)
   let scanScheduled = false;
   function scheduleScan() {
     if (scanScheduled) return;
@@ -225,6 +319,7 @@
     requestAnimationFrame(() => {
       scanScheduled = false;
       scan();
+      reapAndPlace();   // mutations move/replace posts — reap and reposition in the same frame
     });
   }
 

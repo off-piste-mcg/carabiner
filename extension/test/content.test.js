@@ -79,7 +79,10 @@ async function loadContentScript(html) {
   // which is all content.js's `nextId()` needs) is non-configurable and re-assigning it
   // throws — and there is nothing content.js needs from jsdom's copy that Node's doesn't
   // already provide for this one call.
-  for (const key of ["document", "MutationObserver", "requestAnimationFrame", "getComputedStyle", "Node"]) {
+  // "window" itself is on the list since the overlay refactor: content.js registers
+  // scroll/resize listeners and reads window.innerWidth/innerHeight for placement — in a
+  // real content script `window` always exists; this only mirrors that.
+  for (const key of ["window", "document", "MutationObserver", "requestAnimationFrame", "getComputedStyle", "Node"]) {
     globalThis[key] = window[key];
   }
   // `navigator` needs the same non-configurable-getter workaround as `crypto` (Node also
@@ -225,4 +228,51 @@ test("a dead/unregistered worker (no ack) settles the button as an error, not a 
   // paint(CROSS, "rgba(200,40,40,.9)") — settle("error") — ran synchronously inside the
   // sendMessage callback.
   assert.equal(button.style.background, "rgba(200, 40, 40, 0.9)");
+});
+
+test("the page's own DOM is never written — buttons live in the overlay, not in Instagram's tree", async () => {
+  // THE hydration bug, 2026-08-17, A/B-confirmed by the user: the first shipped version
+  // did container.appendChild(host) + container.style.position = "relative" — writes
+  // inside the React-owned tree — and Instagram itself broke (React #418 hydration
+  // mismatches: skeleton feeds, broken grids, an unresponsive post modal). Extension
+  // off → Instagram flawless; on → broken. This pins the structural fix: the container
+  // gains no children, no attributes, no inline style — the button lives in a
+  // <carabiner-overlay> appended to documentElement, OUTSIDE anything React hydrates.
+  const html = `<!doctype html><body><a href="/p/C1a2b3c4/">post</a></body>`;
+  const ctx = await loadContentScript(html);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const anchor = ctx.document.querySelector("a[href='/p/C1a2b3c4/']");
+  assert.equal(anchor.children.length, 0, "container must gain no child elements");
+  assert.equal(anchor.getAttribute("style"), null, "container must gain no inline style");
+  assert.ok(!anchor.contains(host), "the button host must not live inside the container");
+
+  assert.equal(host.parentElement.tagName, "CARABINER-OVERLAY");
+  assert.equal(host.parentElement.parentElement, ctx.document.documentElement,
+    "the overlay hangs off documentElement, beside <body>, outside the hydrated tree");
+  assert.ok(!ctx.document.body.contains(host.parentElement),
+    "the overlay must not be inside <body> (Instagram's app root lives there)");
+});
+
+test("a recycled container element (same node, new href) gets a fresh button for the NEW post", async () => {
+  // Virtualized lists reuse DOM nodes. With placement keyed by element, a stale mapping
+  // would download the WRONG post — the worst bug this extension could have. attach()
+  // must notice the url changed and rebind.
+  const ctx = await loadContentScript(`<!doctype html><body><a href="/p/AAAAAAA1/">post</a></body>`);
+  await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const anchor = ctx.document.querySelector("a");
+  anchor.setAttribute("href", "/p/BBBBBBB2/");
+  ctx.document.body.appendChild(ctx.document.createComment("mutation"));  // trigger a real scan
+
+  await waitFor(() => {
+    const h = ctx.document.querySelector("[data-carabiner-host]");
+    if (!h) return false;
+    ctx.shadowOf(h).querySelector("button").click();
+    const last = ctx.sentMessages[ctx.sentMessages.length - 1];
+    if (last) ctx.deliver({ type: "done", id: last.id, result: "ok" });  // disarm the 90s watchdog
+    return last && last.url === "https://www.instagram.com/p/BBBBBBB2/";
+  });
+  assert.equal(ctx.document.querySelectorAll("[data-carabiner-host]").length, 1,
+    "rebinding must not leave the old button behind");
 });
