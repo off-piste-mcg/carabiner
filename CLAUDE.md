@@ -137,6 +137,17 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   users install nothing extra; Chrome is an unlisted Web Store listing that **does not
   exist yet**. Scope is Instagram feed / profile grid / permalink pages — no Stories, no
   other sites (the hotkey stays the answer for YouTube and Pinterest).
+  **The reels feed (`instagram.com/reels/`) gets no button either, and that is a scope
+  boundary rather than a bug — measured live 2026-08-17, so don't re-diagnose it from
+  scratch.** `selectContainers` accepts an `<article>` or a permalink-shaped `<a href>`;
+  that page has **zero** articles, and its 35 post-shaped anchors are Instagram's own small
+  affordances (`44x32`, `24x24`, `130x16` …), not posts. The reel itself is a `<div>`, so
+  nothing sized ever becomes a container and `place()`'s `>= 48x48` + in-viewport test
+  hides every button (measured: 14 hosts, 0 visible). Losing it costs little: on that page
+  the tab URL names the reel, which is exactly what the hotkey handles. The cost that does
+  exist is 14 shadow-root hosts created and repositioned every frame for anchors that can
+  never show a button — bounded and invisible, but real, and the first thing to remove if
+  reels support is ever added.
 - **`files/`** — original seed: proven `igdl`/`igdls` functions + the `ig-grab.js`
   bookmarklet. Reference only.
 - **`Carabiner_svg.svg`** (repo root) — the original brand-source SVG the status-bar icon
@@ -375,8 +386,10 @@ change, so an index resolved at attach would be stale after a swipe and one bake
 `url` would recreate the button on every swipe. The page URL wins only when it names *that
 same post*: `location.search` is page-global while a button belongs to one container, and
 with a post modal open over the feed the two genuinely diverge. Design:
-`docs/superpowers/specs/2026-08-17-carousel-slide-index-design.md`. **Not yet confirmed in
-a real browser** — jsdom only.
+`docs/superpowers/specs/2026-08-17-carousel-slide-index-design.md`. **Confirmed in a real
+browser 2026-08-17** (Wisse, Chrome: swiped a feed carousel to slide 3, answered "This
+slide", slide 3 landed) — which also proves the `web_accessible_resources` entry, the one
+part of this no test can see.
 
 What a human has actually verified:
 
