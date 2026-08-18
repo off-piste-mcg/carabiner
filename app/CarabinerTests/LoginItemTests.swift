@@ -77,4 +77,82 @@ final class LoginItemTests: XCTestCase {
         XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: false, status: .notDetermined),
                        .nothing)
     }
+
+    // MARK: - Wiring (gotcha #34: the mapping being right proves nothing about the call site)
+
+    /// Records what was asked of it, and can be made to fail on demand.
+    private final class FakeLoginItem: LoginItemControlling {
+        var status: LoginItemStatus = .notRegistered
+        var registerCalls = 0
+        var unregisterCalls = 0
+        var registerError: Error?
+
+        func register() throws {
+            registerCalls += 1
+            if let registerError { throw registerError }
+            status = .enabled
+        }
+        func unregister() throws {
+            unregisterCalls += 1
+            status = .notRegistered
+        }
+    }
+
+    private struct Boom: Error {}
+
+    private func waitForStatus(_ checker: PermissionChecking,
+                               _ call: (PermissionChecking, @escaping (PermissionStatus) -> Void) -> Void)
+        -> PermissionStatus {
+        let done = expectation(description: "status")
+        var result: PermissionStatus?
+        call(checker) { s in result = s; done.fulfill() }
+        wait(for: [done], timeout: 2)
+        return result ?? .notDetermined
+    }
+
+    func testCheckerReportsTheRealServiceStatus() {
+        let fake = FakeLoginItem()
+        fake.status = .enabled
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let s = waitForStatus(checker) { c, done in c.status(for: .launchAtLogin, completion: done) }
+        XCTAssertEqual(s, .granted)
+    }
+
+    func testRequestRegistersAndReportsTheResultingStatus() {
+        let fake = FakeLoginItem()
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let s = waitForStatus(checker) { c, done in c.request(.launchAtLogin, completion: done) }
+        XCTAssertEqual(fake.registerCalls, 1)
+        XCTAssertEqual(s, .granted)
+    }
+
+    func testAFailedRegisterLeavesTheRowOffRatherThanLying() {
+        // The switch must land on the truth. A register() that throws leaves the item
+        // unregistered, so the row must read off — gotcha #37 is a row whose Allow silently
+        // did nothing and looked fine.
+        let fake = FakeLoginItem()
+        fake.registerError = Boom()
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let s = waitForStatus(checker) { c, done in c.request(.launchAtLogin, completion: done) }
+        XCTAssertEqual(fake.registerCalls, 1)
+        XCTAssertEqual(s, .notDetermined, "a thrown register must not present as granted")
+    }
+
+    func testRevokeUnregistersAndReportsOff() {
+        let fake = FakeLoginItem()
+        fake.status = .enabled
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let s = waitForStatus(checker) { c, done in c.revoke(.launchAtLogin, completion: done) }
+        XCTAssertEqual(fake.unregisterCalls, 1)
+        XCTAssertEqual(s, .notDetermined)
+    }
+
+    func testRevokeOnAnyOtherRowTouchesNothing() {
+        // The protocol default must be inert: no existing row has an in-process revoke, and
+        // a default that DID something would be a silent behaviour change for all of them.
+        let fake = FakeLoginItem()
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        _ = waitForStatus(checker) { c, done in c.revoke(.notifications, completion: done) }
+        XCTAssertEqual(fake.unregisterCalls, 0)
+    }
 }

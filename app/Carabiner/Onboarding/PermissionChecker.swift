@@ -23,7 +23,18 @@ protocol PermissionChecking {
     /// Active: shows the OS prompt (launching the browser first when it must be
     /// running for the prompt to appear). Completion on the main queue.
     func request(_ row: PermissionRow, completion: @escaping (PermissionStatus) -> Void)
+    /// Undo a grant in process. Only `.launchAtLogin` can: see PermissionRow.canRevokeInProcess.
+    func revoke(_ row: PermissionRow, completion: @escaping (PermissionStatus) -> Void)
     func openSystemSettings(for row: PermissionRow)
+}
+
+extension PermissionChecking {
+    /// Default: nothing to revoke. Every TCC row lands here, and it must stay a plain
+    /// status re-read — a default that took action would silently change every row's
+    /// behaviour, and existing test fakes conform without knowing this method exists.
+    func revoke(_ row: PermissionRow, completion: @escaping (PermissionStatus) -> Void) {
+        status(for: row, completion: completion)
+    }
 }
 
 final class LivePermissionChecker: PermissionChecking {
@@ -44,11 +55,17 @@ final class LivePermissionChecker: PermissionChecking {
     /// call site and test, none of which exercised this path, is unaffected.
     private let serverState: () -> GrabServer.State
 
+    /// The login-item seam. Defaults to the real one so every existing call site and test —
+    /// none of which knows this row exists — keeps working untouched.
+    private let loginItem: LoginItemControlling
+
     init(browser: Browser, lastSeen: @escaping () -> [String: Date] = { [:] },
-         serverState: @escaping () -> GrabServer.State = { .listening }) {
+         serverState: @escaping () -> GrabServer.State = { .listening },
+         loginItem: LoginItemControlling = LiveLoginItemController()) {
         self.browser = browser
         self.lastSeen = lastSeen
         self.serverState = serverState
+        self.loginItem = loginItem
     }
 
     /// The exact read a Safari-cookie grab makes. Existence alone proves nothing (a denied
@@ -102,7 +119,10 @@ final class LivePermissionChecker: PermissionChecking {
                 DispatchQueue.main.async { completion(s) }
             }
         case .launchAtLogin:
-            DispatchQueue.main.async { completion(.notDetermined) } // replaced in Task 3
+            // Cheap and local — no TCC round-trip, no target to start — so unlike
+            // fullDiskAccess this needs no hop off the main queue.
+            let s = loginItemStatus(loginItem.status)
+            DispatchQueue.main.async { completion(s) }
         }
     }
 
@@ -147,8 +167,28 @@ final class LivePermissionChecker: PermissionChecking {
             openSystemSettings(for: row)
             status(for: row, completion: completion)
         case .launchAtLogin:
-            status(for: row, completion: completion) // replaced in Task 3
+            // Not an OS prompt: this genuinely performs the change. Errors are logged and
+            // then the REAL status is read back, so a failed register presents as still-off
+            // rather than as a switch that moved and did nothing (gotcha #37).
+            do {
+                try loginItem.register()
+            } catch {
+                NSLog("Carabiner: login item register failed: %@", error.localizedDescription)
+            }
+            let s = loginItemStatus(loginItem.status)
+            DispatchQueue.main.async { completion(s) }
         }
+    }
+
+    func revoke(_ row: PermissionRow, completion: @escaping (PermissionStatus) -> Void) {
+        guard row == .launchAtLogin else { status(for: row, completion: completion); return }
+        do {
+            try loginItem.unregister()
+        } catch {
+            NSLog("Carabiner: login item unregister failed: %@", error.localizedDescription)
+        }
+        let s = loginItemStatus(loginItem.status)
+        DispatchQueue.main.async { completion(s) }
     }
 
     func openSystemSettings(for row: PermissionRow) {
