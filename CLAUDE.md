@@ -293,12 +293,18 @@ ls -1 ~/Downloads | diff /tmp/before.txt - | grep '^>'
 >
 > **Still open before this ships**, from
 > `docs/superpowers/plans/2026-08-14-browser-extension-manual-verification.md`
-> (16 of 21 done, each tick dated):
-> items 10-11 (dialog-left-open patience; cold-launch on click), 17 (the FDA-denied
+> (17 of 21 done, each tick dated):
+> item 10 (dialog-left-open patience), 17 (the FDA-denied
 > Safari→Chrome cookie fallback, which costs an FDA revoke plus the OS-forced relaunch),
 > and 19 (the Chrome Web Store listing — `chrome://policy` is clean, so the $5 is
 > unblocked; `OnboardingViewModel.chromeWebStoreURL` is still `PLACEHOLDER_ID`, which
 > redirects to the Web Store home page rather than 404ing).
+>
+> **Item 11 (cold launch) is DONE as of 2026-08-18, Chrome only** (commit 0864b45). The
+> cause was not the launch mechanism at all: `GET /health` is 403 to Chrome because a
+> simple GET from an extension worker carries no `Origin` — gotcha #38, which also means
+> the onboarding window's **Chrome row has never been able to turn green**. That half is
+> fixed but unverified, and **Safari's cold-launch path is unverified too.**
 >
 > The **Setup & Permissions window is verified** as of 2026-08-17 (items 12-16), including
 > the question that had been the sharpest unknown — a fresh Full Disk Access grant does not
@@ -368,11 +374,12 @@ while the app release is newest — publish future `deps-*` releases as **pre-re
 they will steal the link and send teammates to a release with no DMG in it.
 
 **The browser extension: WORKING in both browsers, not yet shipped (verified 2026-08-16,
-branch `feat/browser-extension`).** `extension/`'s offline suite is **89/89** (`node
+branch `feat/browser-extension`).** `extension/`'s offline suite is **101/101** (`node
 --test` from `extension/`). Two notes on that number, because it has been wrong here
 before: the figure recorded until 2026-08-17 was 64, and the real count at that moment was
-67 — an implementer measured it, so trust `node --test` over this line. The jump to 89 is
-the carousel slide-index work (below).
+67 — an implementer measured it, so trust `node --test` over this line. 89 was the
+carousel slide-index work (below); the jump to 101 is the cold-launch fix (gotcha #38),
+which added `src/launch.js` plus its tests.
 
 **The button grabs the slide you are looking at, since 2026-08-17.** It did not before, and
 the failure was the bad kind: swipe a feed carousel to slide 2, answer the dialog with
@@ -408,9 +415,14 @@ What a human has actually verified:
   `Privacy_AllFiles` deep link, the Safari row's Allow (which failed silently first: gotcha
   #37), and `lastSeen` surviving an app restart. The FDA row's green was cross-checked with
   a real Safari-cookie grab, not trusted.
-- **NOT yet verified:** items 10-11 (dialog-left-open patience, cold-launching the app from
-  a button click) and 17 (the Safari→Chrome cookie fallback end to end, which needs FDA
-  revoked and therefore another OS-forced relaunch).
+- **Verified 2026-08-18 (Wisse, Chrome, item 11):** cold launch. With Carabiner quit, a
+  button click opens the "Open Carabiner?" prompt, launches the app, closes the launch tab,
+  returns focus to the post and lands the file — re-checked on the cleaned build after all
+  diagnostics were removed, not on the instrumented one. Gotcha #38 is what it cost.
+- **NOT yet verified:** item 10 (dialog-left-open patience), 17 (the Safari→Chrome cookie
+  fallback end to end, which needs FDA revoked and therefore another OS-forced relaunch),
+  **Safari's cold-launch path**, and the **Chrome onboarding row** now that `ping()` can
+  actually reach the app.
 
 What is left before shipping, needing a human with a Google account:
 
@@ -1347,6 +1359,55 @@ from the URL for "just this slide".
     `/health` **solely** on `onInstalled`/`onStartup`: an app restart cannot trigger a
     check-in, so identical timestamps either side of one prove the green row came off disk
     (item 16) rather than from a fresh ping.
+
+38. **Chrome sends NO `Origin` header on a simple GET from an extension service worker —
+    so every origin-gated GET is 403 forever, and `/health` was one.** Found 2026-08-18
+    fixing item 11's cold launch. Measured in Chrome's own worker console, against a
+    running app:
+
+    ```
+    GET  /health?browser=chrome                          → 403
+    POST /health?browser=chrome (content-type: json)     → 200
+    ```
+
+    The cause is the flip side of gotcha #29: `host_permissions` lets Chrome bypass CORS
+    entirely for these requests, and a request that never goes through CORS has no
+    `Origin` attached. `POST /grab` works only because `content-type: application/json`
+    makes it a *non-simple* request. So the rule is **not** "extension fetches carry an
+    Origin" — it is "non-simple extension fetches do".
+
+    Two live consequences, both silent, both shipped:
+    - The cold-launch probe polled `GET /health` for 120 seconds against an app that was
+      up **2 seconds in**, and could not have succeeded at any timeout.
+    - `ping()` — the check-in that turns the onboarding window's browser row green — used
+      the same bare GET, so **it has never once reached the app from Chrome**. Only
+      Safari's row was ever verified, and Safari sends an `Origin` (it preflights), which
+      is exactly why this survived review.
+
+    Both now use one `health()` helper with `/grab`'s own request shape. Do **not** "fix"
+    a future case of this by adding a custom header to a GET: that works in Chrome and
+    silently breaks Safari, whose preflight advertises no allowed headers (gotcha #29
+    again, same file, same trap).
+
+    **The debugging lesson is the expensive part.** `curl` got 200 while the extension got
+    nothing, and three rounds went into worker-termination and hung-socket theories —
+    both consistent with every symptom, both wrong — before anyone compared the two
+    *requests*. When a shell client works and the browser client does not, the requests
+    differ; diff them before theorising about lifetimes. Two instruments also lied on the
+    way, and neither announced it:
+    - **An open DevTools console keeps an MV3 service worker alive**, so it cannot observe
+      a worker-termination bug — it prevents it. Any "it works with the console open"
+      result is about the console, not the code.
+    - A `chrome.storage` trace added to see past that was **inert**: the manifest lacked
+      the `storage` permission and the write sat inside a silent `catch`. It looked like
+      evidence of nothing happening; it was evidence of nothing being recorded. Verify an
+      instrument before trusting a run made with it, and never let a diagnostic swallow
+      its own errors.
+
+    Also settled here, since it looked like the bug twice: Chrome's "Open Carabiner?"
+    external-protocol dialog is **tab-modal**, so a launch tab created `active: false`
+    shows nobody a prompt, and closing that tab cancels the pending handoff. The launch
+    tab must be visible and must survive until the app answers.
 
 ## Dependencies
 

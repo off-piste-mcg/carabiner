@@ -1,11 +1,17 @@
 # Browser extension — manual verification checklist
 
-**Date:** 2026-08-14 · **Updated:** 2026-08-17
-**Status:** 16 of 21 done — the extension is WORKING in both browsers (button, grabs,
-mixed carousel, Cancel), and the Setup & Permissions window is verified except for the
-fallback. Open: 10-11 (button patience, cold launch), 17 (the FDA-denied Safari→Chrome
-fallback, which costs an FDA revoke and an OS-forced relaunch), and 19 (the Chrome Web
-Store listing).
+**Date:** 2026-08-14 · **Updated:** 2026-08-18
+**Status:** 17 of 21 done — the extension is WORKING in both browsers (button, grabs,
+mixed carousel, Cancel), the Setup & Permissions window is verified except for the
+fallback, and **cold launch now works (item 11, Chrome only)**. Open: 10 (button
+patience), 17 (the FDA-denied Safari→Chrome fallback, which costs an FDA revoke and an
+OS-forced relaunch), and 19 (the Chrome Web Store listing).
+
+**New and NOT on this list, found while fixing 11:** `ping()` used the same bare
+`GET /health` that Chrome answers 403 to, so the extension's check-in has never reached
+the app from Chrome — meaning the onboarding window's **Chrome row can never have turned
+green**. Fixed in commit 0864b45, unverified. Safari's row was verified (item 15) because
+Safari sends an `Origin`; that is why this survived.
 
 Everything on this branch that a machine can check has been checked: 227 Swift tests,
 64 JS tests, both shell suites, and per-task reviews with adversarial verification.
@@ -44,29 +50,43 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
       "This slide", "All", and Cancel (nothing downloaded, no banner) all correct.
 - [ ] **10. Leave the carousel dialog open for a few minutes**, then answer it. The button
       must not have given up; the app's own 3600s backstop should be the only bound.
-- [ ] **11. Quit Carabiner, then click a button. FAILS as of 2026-08-17 — a real bug, not
-      a missing tick.** With the app closed, clicking a button does not launch it and no
-      "Open Carabiner?" prompt ever appears, so the button silently does nothing. Do not
-      re-derive this from scratch; what is and is not established:
+- [x] **11. Quit Carabiner, then click a button — DONE 2026-08-18 (Wisse, Chrome).** Cold
+      click launches the app, the launch tab closes itself, focus returns to the post, and
+      the file lands. Commit 0864b45. It took **three** distinct bugs, and the first two
+      were not the cause — worth knowing, because each one alone reproduces the symptom:
 
-      | Evidence | Confidence |
+      | Bug | Why it hid |
       |---|---|
-      | `open carabiner://launch` from a shell launches the app | solid — the scheme registration and the macOS side are fine |
-      | `chrome.tabs.create({url:"carabiner://launch", active:false})` with **no** removal → app launched | n=1 |
-      | the same call with the shipped **1500ms** `tabs.remove` → never launched (rechecked 11s later) | n=1 |
-      | the same at **3000ms** → never launched | n=1 |
-      | page-context `location.href` and a real click on a `carabiner://` link | **discarded — Chrome was not the frontmost app**, which plausibly suppresses the external-protocol dialog |
+      | launch tab created `active: false` | Chrome's "Open Carabiner?" dialog is TAB-MODAL, so it rendered on a tab nobody could see, then our own `tabs.remove(1500ms)` destroyed it. Nothing could answer it. |
+      | fixed 2500ms retry | Sized against the app's 0.21s cold start, but the launch waits on a HUMAN answering that dialog. Measured: app started fine, grab still failed with a red X. |
+      | **`GET /health` → 403 (the actual cause)** | `/health` is origin-gated, and Chrome sends **no `Origin`** on a simple GET from an extension worker — host permissions bypass CORS, so there is nothing to attach one to. The probe could not have succeeded at ANY timeout. |
 
-      Leading hypothesis: `launchApp()`'s `setTimeout(() => chrome.tabs.remove(...), 1500)`
-      cancels a still-pending external-protocol handoff — the created tab sits at
-      `url: ""`, `pendingUrl: "carabiner://launch"`. **Not settled**: every variant ran once,
-      and the two arms differed in more than the timer. Redo the A/B with Chrome focused and
-      several repetitions before writing a fix.
+      The decisive measurement, in Chrome's own service-worker console against a running
+      app — five seconds of work that should have come first:
 
-      If it is confirmed, the timer is the wrong shape regardless: cleanup must be tied to
-      the app actually answering (poll `GET /health`) rather than to a bare delay, and note
-      that the **2500ms retry may also be too short** — if the handoff needs longer than
-      that, the worker gives up before the app it just launched is ready.
+      ```
+      GET  /health → 403
+      POST /health (content-type: application/json) → 200
+      ```
+
+      Two process lessons, both paid for in real runs:
+
+      - **"curl works, the extension doesn't" means the REQUESTS differ.** Three rounds went
+        into worker-termination and hung-socket theories, both consistent with the symptom
+        and both wrong, before anyone compared the two requests.
+      - **An open DevTools console keeps an MV3 worker alive**, so it cannot observe a
+        worker-termination bug — it prevents it. A `chrome.storage` trace was added to see
+        past that, and was itself inert at first because the manifest lacked the `storage`
+        permission while the write was wrapped in a silent `catch`. **Verify the instrument
+        before trusting a run made with it.**
+
+      The `storage` permission and all trace/console diagnostics were removed before the
+      commit, and the cold path was re-verified on the cleaned build — not on the
+      instrumented one.
+
+      **Safari's cold-launch path is still unverified.** Safari sends an `Origin` where
+      Chrome does not (gotcha #29), so it may well have been fine all along, or fail
+      differently. Do not assume this tick covers it.
 
 ## C. Permissions and setup
 
