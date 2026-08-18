@@ -7,11 +7,14 @@ fallback, and **cold launch now works (item 11, Chrome only)**. Open: 10 (button
 patience), 17 (the FDA-denied Safari→Chrome fallback, which costs an FDA revoke and an
 OS-forced relaunch), and 19 (the Chrome Web Store listing).
 
-**New and NOT on this list, found while fixing 11:** `ping()` used the same bare
-`GET /health` that Chrome answers 403 to, so the extension's check-in has never reached
-the app from Chrome — meaning the onboarding window's **Chrome row can never have turned
-green**. Fixed in commit 0864b45, unverified. Safari's row was verified (item 15) because
-Safari sends an `Origin`; that is why this survived.
+**New and NOT on this list, found while fixing 11 — now fixed AND verified:** `ping()` used
+the same bare `GET /health` that Chrome answers 403 to, so the extension's check-in had
+never once reached the app from Chrome, and the onboarding window's **Chrome row could
+never have turned green**. Fixed in 0864b45; **verified green 2026-08-18** (Wisse: reload
+the Chrome extension to fire `onInstalled`, then open Setup & Permissions — both rows
+green). Safari's row was verified earlier (item 15) because Safari sends an `Origin`, which
+is precisely why this survived review for so long: the row that worked was the one that got
+looked at.
 
 Everything on this branch that a machine can check has been checked: 227 Swift tests,
 64 JS tests, both shell suites, and per-task reviews with adversarial verification.
