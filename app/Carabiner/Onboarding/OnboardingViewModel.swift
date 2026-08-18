@@ -117,6 +117,8 @@ final class OnboardingViewModel: ObservableObject {
                     self.checker.openSystemSettings(for: row)
                 }
                 self.refresh(row)
+            case .revoke:
+                self.refresh(row) // replaced in Task 4
             case .nothing:
                 self.refresh(row)
             }

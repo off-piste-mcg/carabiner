@@ -101,6 +101,8 @@ final class LivePermissionChecker: PermissionChecking {
                 let s = Self.detectFullDiskAccessStatus()
                 DispatchQueue.main.async { completion(s) }
             }
+        case .launchAtLogin:
+            DispatchQueue.main.async { completion(.notDetermined) } // replaced in Task 3
         }
     }
 
@@ -144,6 +146,8 @@ final class LivePermissionChecker: PermissionChecking {
             // deep-link — so an exhaustive switch doesn't have to mean "does nothing".
             openSystemSettings(for: row)
             status(for: row, completion: completion)
+        case .launchAtLogin:
+            status(for: row, completion: completion) // replaced in Task 3
         }
     }
 
@@ -161,6 +165,8 @@ final class LivePermissionChecker: PermissionChecking {
             return
         case .fullDiskAccess:
             url = fullDiskAccessSettingsURL
+        case .launchAtLogin:
+            url = loginItemSettingsURL
         }
         if let u = URL(string: url) { NSWorkspace.shared.open(u) }
     }

@@ -32,7 +32,7 @@ enum PermissionStatus: Equatable {
 /// GrabRunner's shouldRetryWithChrome for the Chrome-cookie fallback this row is the
 /// permanent fix for).
 enum PermissionRow: CaseIterable {
-    case notifications, browserAccess, carouselDialog, browserButton, fullDiskAccess
+    case notifications, browserAccess, carouselDialog, browserButton, fullDiskAccess, launchAtLogin
 
     enum Tick { case pending, ok, cross }
     enum Action: Equatable { case request, openSystemSettings, none }
@@ -44,6 +44,7 @@ enum PermissionRow: CaseIterable {
         case .carouselDialog: return "Carousel dialog"
         case .browserButton:  return "Instagram button"
         case .fullDiskAccess: return "Full Disk Access"
+        case .launchAtLogin:  return "Launch at login"
         }
     }
 
@@ -54,6 +55,7 @@ enum PermissionRow: CaseIterable {
         case .carouselDialog: return "So Carabiner can ask 'this slide or the whole set?'."
         case .browserButton:  return "So you can save a post straight from your feed."
         case .fullDiskAccess: return "Safari keeps its cookies in a protected folder — Carabiner needs this to read them."
+        case .launchAtLogin:  return "So Carabiner is already running. Otherwise your browser asks 'Open Carabiner?' every time you use the button."
         }
     }
 
@@ -70,8 +72,8 @@ enum PermissionRow: CaseIterable {
     /// row now rather than a comment in one branch.
     var requiresRunningTarget: Bool {
         switch self {
-        case .notifications, .browserButton, .fullDiskAccess: return false
-        case .browserAccess, .carouselDialog:                 return true
+        case .notifications, .browserButton, .fullDiskAccess, .launchAtLogin: return false
+        case .browserAccess, .carouselDialog:                                 return true
         }
     }
 
@@ -93,7 +95,7 @@ enum PermissionRow: CaseIterable {
     /// carousel row that "Chrome will open first" was simply false.
     var targetLaunchNote: String? {
         switch self {
-        case .notifications, .browserButton, .fullDiskAccess: return nil
+        case .notifications, .browserButton, .fullDiskAccess, .launchAtLogin: return nil
         case .browserAccess:                                  return "Chrome will open first"
         case .carouselDialog:                                 return "System Events will start first"
         }
@@ -225,6 +227,12 @@ func loginItemStatus(_ status: LoginItemStatus) -> PermissionStatus {
 /// this is the pane's real anchor, verified against System Settings' own deep-link scheme.
 let fullDiskAccessSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
 
+/// Verified 2026-08-18 by opening it and reading the window title back via System Events,
+/// which returned literally `Login Items & Extensions` — the same instrument gotcha #37
+/// established for the Full Disk Access link, and for the same reason: a deep link that
+/// opens the wrong pane is indistinguishable from a working one until a human looks.
+let loginItemSettingsURL = "x-apple.systempreferences:com.apple.LoginItems-Settings.extension"
+
 /// Pure: classifies the outcome of the real `open()` syscall against Safari's cookie file.
 /// Factored out of `LivePermissionChecker.fullDiskAccessStatus()` (review fix round 1,
 /// "ALSO FIX" — the riskiest new green tick in this task had zero coverage) so the
@@ -258,6 +266,10 @@ enum ToggleIntent: Equatable {
     /// Deep-link to the relevant System Settings pane — the switch will not move until
     /// the user changes it there, which is the honest outcome.
     case openSystemSettings
+    /// Undo the grant ourselves. Only legal where the app genuinely can: a login item is
+    /// `unregister()`-able, unlike every TCC permission, where macOS offers no in-process
+    /// revoke and `openSystemSettings` is the only truthful answer.
+    case revoke
     /// Already in the requested state.
     case nothing
 }
@@ -294,6 +306,11 @@ extension PermissionRow {
     /// fix round 1, Finding 3). `toggleAction` already resolves `.notApplicable` to
     /// `.nothing`, so this only needs to stop the blanket override from clobbering it.
     func intent(desired: Bool, status: PermissionStatus) -> ToggleIntent {
+        // Before anything else: a row that can revoke itself must not be routed to System
+        // Settings by the shared "off is never in-process" rule inside toggleAction.
+        if !desired, canRevokeInProcess {
+            return status == .granted ? .revoke : .nothing
+        }
         guard desired else { return toggleAction(desired: desired, status: status) }
         guard canBePrompted else {
             return status == .notApplicable ? .nothing : .openSystemSettings
@@ -301,10 +318,18 @@ extension PermissionRow {
         return toggleAction(desired: desired, status: status)
     }
 
+    /// Whether turning this row OFF is something the app can do itself.
+    ///
+    /// False for every TCC permission: macOS provides no API to hand a grant back, which is
+    /// why `toggleAction` resolves every "off" to `.openSystemSettings`. A login item is not
+    /// a TCC permission — `SMAppService.unregister()` is a real revoke — so that blanket
+    /// rule would send the user to Settings to do something we could have just done.
+    var canRevokeInProcess: Bool { self == .launchAtLogin }
+
     var canBePrompted: Bool {
         switch self {
-        case .notifications, .browserAccess, .carouselDialog, .browserButton: return true
-        case .fullDiskAccess:                                                 return false
+        case .notifications, .browserAccess, .carouselDialog, .browserButton, .launchAtLogin: return true
+        case .fullDiskAccess:                                                                  return false
         }
     }
 }

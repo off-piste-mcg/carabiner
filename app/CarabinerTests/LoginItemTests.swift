@@ -26,4 +26,55 @@ final class LoginItemTests: XCTestCase {
         // a tick — a false green here is exactly the failure gotcha #28 exists about.
         XCTAssertEqual(loginItemStatus(.notFound), .denied)
     }
+
+    // MARK: - The row
+
+    func testRowCopyNamesTheCostOfLeavingItOff() {
+        XCTAssertEqual(PermissionRow.launchAtLogin.title, "Launch at login")
+        XCTAssertEqual(PermissionRow.launchAtLogin.why,
+                       "So Carabiner is already running. Otherwise your browser asks "
+                       + "'Open Carabiner?' every time you use the button.")
+    }
+
+    func testRowHasNoTargetAppToLaunch() {
+        // These three exist for the Automation rows, which must start Chrome or System
+        // Events before the OS will even show a prompt. There is no target here.
+        XCTAssertFalse(PermissionRow.launchAtLogin.requiresRunningTarget)
+        XCTAssertFalse(PermissionRow.launchAtLogin.mayLaunchTargetForStatusCheck)
+        XCTAssertNil(PermissionRow.launchAtLogin.targetLaunchNote)
+    }
+
+    func testTurningItOffIsSomethingWeCanActuallyDo() {
+        // THE difference from every other row. Every TCC row resolves "off" to
+        // .openSystemSettings because macOS offers no in-process revoke. unregister() is a
+        // real revoke, so this row must not send the user to Settings to do what we can do.
+        XCTAssertTrue(PermissionRow.launchAtLogin.canRevokeInProcess)
+        XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: false, status: .granted),
+                       .revoke)
+    }
+
+    func testEveryOtherRowStillCannotRevokeItself() {
+        for row in PermissionRow.allCases where row != .launchAtLogin {
+            XCTAssertFalse(row.canRevokeInProcess, "\(row) must not claim an in-process revoke")
+            XCTAssertEqual(row.intent(desired: false, status: .granted), .openSystemSettings,
+                           "\(row) has no in-process revoke and must still deep-link")
+        }
+    }
+
+    func testTurningItOnFromOffAsksUsToRegister() {
+        XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: true, status: .notDetermined),
+                       .request)
+    }
+
+    func testTurningItOnWhenSettingsHasItBlockedDeepLinks() {
+        // .requiresApproval → .denied → register() would silently not stick, so the only
+        // honest action is to send the user where they can actually change it.
+        XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: true, status: .denied),
+                       .openSystemSettings)
+    }
+
+    func testRevokingWhenAlreadyOffDoesNothing() {
+        XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: false, status: .notDetermined),
+                       .nothing)
+    }
 }
