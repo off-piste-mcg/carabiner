@@ -79,9 +79,12 @@ wrong pane is indistinguishable from one that works until a human looks.
 
 ## Errors must be visible
 
-`register()` and `unregister()` both `throw`. Both failures surface in the row — the row
-reads its status back after the attempt, so a failed toggle presents as "still off" plus the
-thrown reason, rather than as a switch that slides and does nothing.
+`register()` and `unregister()` both `throw`. After either attempt the row reads the **real**
+status back, so a failed toggle presents as "still off" rather than as a switch that slides
+and does nothing. The thrown reason is logged (`NSLog`), not rendered in the row: showing it
+would need a new `PermissionStatus` case carrying a message, and that is more churn than
+this failure justifies. The property that matters — the switch never lies about state — is
+delivered by the read-back, not by the message.
 
 This is not defensive padding. Gotcha #37 records a row whose Allow button silently did
 nothing for exactly this reason: `SFSafariApplication.showPreferencesForExtension`'s
