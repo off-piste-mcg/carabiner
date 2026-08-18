@@ -201,6 +201,26 @@ func mostRecentBrowserCheckIn(_ lastSeen: [String: Date]) -> Date? {
     lastSeen.values.max()
 }
 
+/// The login-item row's verdict. Kept next to `browserButtonStatus` and `notificationStatus`
+/// because it is the same shape of thing: an OS value a test runner cannot produce, judged
+/// by a function a test runner can.
+///
+/// `.requiresApproval` means the user switched Carabiner off in System Settings → Login
+/// Items & Extensions. Calling `register()` again does NOT override that, so offering
+/// "Allow" would be a button that cannot work; `.denied` is what routes the row to the
+/// Settings deep link instead.
+///
+/// `.notFound` should be unreachable for `SMAppService.mainApp`. It maps to `.denied` rather
+/// than anything softer on purpose: a tick must mean a real, checked yes.
+func loginItemStatus(_ status: LoginItemStatus) -> PermissionStatus {
+    switch status {
+    case .enabled:          return .granted
+    case .notRegistered:    return .notDetermined
+    case .requiresApproval: return .denied
+    case .notFound:         return .denied
+    }
+}
+
 /// Full Disk Access has no System Settings identifier of its own on the automation scheme —
 /// this is the pane's real anchor, verified against System Settings' own deep-link scheme.
 let fullDiskAccessSettingsURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
