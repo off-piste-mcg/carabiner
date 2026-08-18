@@ -155,4 +155,35 @@ final class LoginItemTests: XCTestCase {
         _ = waitForStatus(checker) { c, done in c.revoke(.notifications, completion: done) }
         XCTAssertEqual(fake.unregisterCalls, 0)
     }
+
+    // MARK: - View model
+
+    @MainActor
+    func testSwitchingTheRowOffRevokesInsteadOfOpeningSettings() async {
+        // The point of the whole task: without this the switch would deep-link to System
+        // Settings to do something the app can do itself in one call.
+        let fake = FakeLoginItem()
+        fake.status = .enabled
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let model = OnboardingViewModel(checker: checker)
+
+        model.setEnabled(false, for: .launchAtLogin)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(fake.unregisterCalls, 1)
+        XCTAssertEqual(fake.status, .notRegistered)
+    }
+
+    @MainActor
+    func testSwitchingTheRowOnRegisters() async {
+        let fake = FakeLoginItem()
+        let checker = LivePermissionChecker(browser: .chrome, loginItem: fake)
+        let model = OnboardingViewModel(checker: checker)
+
+        model.setEnabled(true, for: .launchAtLogin)
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(fake.registerCalls, 1)
+        XCTAssertEqual(fake.status, .enabled)
+    }
 }

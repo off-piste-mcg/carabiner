@@ -118,7 +118,10 @@ final class OnboardingViewModel: ObservableObject {
                 }
                 self.refresh(row)
             case .revoke:
-                self.refresh(row) // replaced in Task 4
+                // Only .launchAtLogin reaches here (PermissionRow.canRevokeInProcess). Unlike
+                // every TCC row, "off" is a real action we can perform, so performing it is
+                // the honest response to the switch rather than opening Settings.
+                self.checker.revoke(row) { [weak self] _ in self?.refresh(row) }
             case .nothing:
                 self.refresh(row)
             }
