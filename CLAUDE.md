@@ -419,10 +419,14 @@ What a human has actually verified:
   button click opens the "Open Carabiner?" prompt, launches the app, closes the launch tab,
   returns focus to the post and lands the file — re-checked on the cleaned build after all
   diagnostics were removed, not on the instrumented one. Gotcha #38 is what it cost.
+  Cold launch works in **Safari** too (same day, and quicker than Chrome). Safari first
+  reproduced the original failure, but that was **stale code, not a Safari difference**:
+  the appex ships a build-time copy of the extension, so a JS fix reaches Chrome on a ⟳
+  and reaches Safari only after `xcodebuild` + reinstall. Check that before diagnosing any
+  Safari-only misbehaviour.
 - **NOT yet verified:** item 10 (dialog-left-open patience), 17 (the Safari→Chrome cookie
   fallback end to end, which needs FDA revoked and therefore another OS-forced relaunch),
-  **Safari's cold-launch path**, and the **Chrome onboarding row** now that `ping()` can
-  actually reach the app.
+  and the **Chrome onboarding row** now that `ping()` can actually reach the app.
 
 What is left before shipping, needing a human with a Google account:
 

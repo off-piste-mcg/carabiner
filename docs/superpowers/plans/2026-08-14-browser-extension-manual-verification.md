@@ -84,9 +84,18 @@ The highest-risk unknown on the whole feature. A silent failure here looks ident
       commit, and the cold path was re-verified on the cleaned build — not on the
       instrumented one.
 
-      **Safari's cold-launch path is still unverified.** Safari sends an `Origin` where
-      Chrome does not (gotcha #29), so it may well have been fine all along, or fail
-      differently. Do not assume this tick covers it.
+      **Safari: verified 2026-08-18 too**, and noticeably faster than Chrome. It first
+      failed in Safari with the original symptom (tab opens and closes, no launch) — but
+      that was **stale code, not a Safari difference**: Safari runs a copy of the extension
+      baked into `Carabiner.app` at build time, while Chrome's unpacked install reads
+      `extension/src` directly. The installed appex still had `active: false`, the 1500ms
+      `tabs.remove` and the 2500ms sleep. A rebuild + reinstall fixed it with no code
+      change. When Safari alone misbehaves, check that first:
+
+      ```bash
+      grep -c waitForApp ~/Applications/Carabiner.app/Contents/PlugIns/\
+      CarabinerSafariExtension.appex/Contents/Resources/src/worker.js
+      ```
 
 ## C. Permissions and setup
 
