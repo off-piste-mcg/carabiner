@@ -21,10 +21,23 @@ final class LoginItemTests: XCTestCase {
         XCTAssertEqual(loginItemStatus(.requiresApproval), .denied)
     }
 
-    func testNotFoundIsDeniedRatherThanASilentPass() {
-        // Should not happen for mainApp. A state we do not understand must never render as
-        // a tick — a false green here is exactly the failure gotcha #28 exists about.
-        XCTAssertEqual(loginItemStatus(.notFound), .denied)
+    func testNotFoundStillLetsUsTryToRegister() {
+        // Measured 2026-08-19: mainApp reports .notFound before the FIRST registration —
+        // `sudo sfltool dumpbtm` showed macOS holding no record for the bundle id at all.
+        // This originally mapped to .denied, which routed the row to "Open System Settings"
+        // and sent the user to a list Carabiner was not in, while register() was never
+        // called once. Not a tick (that would be a lie), but not a dead end either.
+        XCTAssertEqual(loginItemStatus(.notFound), .notDetermined)
+        XCTAssertEqual(PermissionRow.launchAtLogin.intent(desired: true, status: loginItemStatus(.notFound)),
+                       .request, "the toggle must actually attempt registration")
+    }
+
+    func testNoStatusEverRendersAsAFalseTick() {
+        // The property the .notFound change must not break: only a real .enabled is a tick.
+        for status in [LoginItemStatus.notRegistered, .requiresApproval, .notFound] {
+            XCTAssertNotEqual(loginItemStatus(status), .granted, "\(status) must not read as granted")
+        }
+        XCTAssertEqual(loginItemStatus(.enabled), .granted)
     }
 
     // MARK: - The row

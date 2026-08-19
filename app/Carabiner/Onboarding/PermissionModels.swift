@@ -212,14 +212,26 @@ func mostRecentBrowserCheckIn(_ lastSeen: [String: Date]) -> Date? {
 /// "Allow" would be a button that cannot work; `.denied` is what routes the row to the
 /// Settings deep link instead.
 ///
-/// `.notFound` should be unreachable for `SMAppService.mainApp`. It maps to `.denied` rather
-/// than anything softer on purpose: a tick must mean a real, checked yes.
+/// `.notFound` is NOT the unreachable case this originally assumed. Measured 2026-08-19 on a
+/// machine that had never registered Carabiner: `SMAppService.mainApp` reports `.notFound`
+/// before the first registration, and `sudo sfltool dumpbtm` confirmed macOS held no record
+/// for the bundle id at all.
+///
+/// It used to map to `.denied`, on the reasoning that a state we do not understand must never
+/// render as a tick. That reasoning is right; the mapping was not. `.denied` routes the row
+/// to "Open System Settings", which sent the user to a list Carabiner is not in — and, worse,
+/// meant `register()` was never called even once. A dead end is not more honest than an
+/// attempt; it just fails earlier and explains less.
+///
+/// `.notDetermined` is not a claim of success either. It offers "Allow", `register()` runs
+/// for real, and whatever the OS says comes back through the status re-read — so a genuine
+/// failure still leaves the row off, now with an error we can actually see.
 func loginItemStatus(_ status: LoginItemStatus) -> PermissionStatus {
     switch status {
     case .enabled:          return .granted
     case .notRegistered:    return .notDetermined
     case .requiresApproval: return .denied
-    case .notFound:         return .denied
+    case .notFound:         return .notDetermined
     }
 }
 

@@ -62,7 +62,11 @@ final class MenuBarController: NSObject {
                                                // that happens AFTER this window opens must
                                                // still read live, not whatever `grabServer`
                                                // reported the moment the checker was built.
-                                               serverState: { [weak self] in self?.grabServer?.state ?? .stopped }),
+                                               serverState: { [weak self] in self?.grabServer?.state ?? .stopped },
+                                               // Explicit rather than relying on the default,
+                                               // so the one real construction site names every
+                                               // seam it depends on.
+                                               loginItem: LiveLoginItemController()),
                 hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
                 clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
         }
