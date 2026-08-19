@@ -374,12 +374,13 @@ while the app release is newest — publish future `deps-*` releases as **pre-re
 they will steal the link and send teammates to a release with no DMG in it.
 
 **The browser extension: WORKING in both browsers, not yet shipped (verified 2026-08-16,
-branch `feat/browser-extension`).** `extension/`'s offline suite is **101/101** (`node
+branch `feat/browser-extension`).** `extension/`'s offline suite is **112/112** (`node
 --test` from `extension/`). Two notes on that number, because it has been wrong here
 before: the figure recorded until 2026-08-17 was 64, and the real count at that moment was
 67 — an implementer measured it, so trust `node --test` over this line. 89 was the
 carousel slide-index work (below); the jump to 101 is the cold-launch fix (gotcha #38),
-which added `src/launch.js` plus its tests.
+which added `src/launch.js` plus its tests; 112 adds `src/actionBar.js` and the first
+tests placement has ever had.
 
 **The button grabs the slide you are looking at, since 2026-08-17.** It did not before, and
 the failure was the bad kind: swipe a feed carousel to slide 2, answer the dialog with
@@ -1414,6 +1415,40 @@ from the URL for "just this slide".
     external-protocol dialog is **tab-modal**, so a launch tab created `active: false`
     shows nobody a prompt, and closing that tab cancels the pending handoff. The launch
     tab must be visible and must survive until the app answers.
+
+39. **A test that loads a module differently than the app does cannot see whole classes of
+    bug — `new Function(source)` does not care whether the file has `export`.** Found
+    2026-08-19 adding `extension/src/actionBar.js`. The file was written in the classic
+    style of `ndjson.js` (plain `function` declarations, no exports), but `content.js`
+    loads it with `await import(chrome.runtime.getURL(...))`. So both functions came back
+    **undefined**, `place()` threw inside a `requestAnimationFrame` callback — silently,
+    because nothing in this extension is allowed to throw into the page — and the button
+    would simply have stayed in its old corner with no error anywhere.
+
+    Eight unit tests over that file were green throughout. They extracted the functions
+    with `new Function(readFileSync(...))`, exactly as `ndjson.test.js` does for a file
+    that genuinely is classic. That extraction ignores module syntax entirely, so it can
+    never fail on a missing `export`. **The test was loading the file in a way the app
+    never does.** The rule: extract with `new Function` ONLY for files the app also loads
+    as classic scripts (`importScripts` — `ndjson.js`, `browser.js`, `launch.js`); import
+    real ES modules the same way `content.js` imports them (`shortcode.js`,
+    `containers.js`, `grabTracker.js`, `slideIndex.js`, `actionBar.js`).
+
+    This is gotcha #23's stub lesson and #31's fixture lesson in a third costume, and the
+    family resemblance is the point: **whenever a test differs from production in the exact
+    dimension under test, it will confirm whatever you hoped.** A stub that does not flush,
+    a fixture you wrote yourself, a loader that ignores exports.
+
+    What actually caught it was a *wiring* test — the first test placement has ever had
+    (`content.test.js`). Two smaller things learned there, both worth reusing:
+    - jsdom has **no layout**: every `getBoundingClientRect()` is zeros, so anything
+      geometric must be driven by stubbing rects per element. This is why `actionBar.js`
+      finds Save by DOM structure rather than by grouping buttons into rows visually — a
+      geometric rule would have been untestable and verified only by eye.
+    - jsdom **does** round-trip `style.transform`, but omits it from `cssText`. A probe that
+      prints `cssText` therefore shows the property missing and invites a completely wrong
+      diagnosis (it cost one here — "jsdom drops transform" was asserted, then measured
+      false a minute later).
 
 ## Dependencies
 
