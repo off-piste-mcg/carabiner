@@ -17,24 +17,31 @@
   // an afternoon of debugging that two debug lines would have answered in ten seconds.
   // debug-level, so they are invisible unless the console is set to Verbose.
   console.debug("[carabiner] content script injected");
-  let permalinkFor, permalinkFromHref, selectContainers, createGrabTracker, grabUrlFor;
+  let permalinkFor, permalinkFromHref, selectContainers, createGrabTracker, grabUrlFor,
+      findSaveButton, saveAnchorPosition;
   try {
     ({ permalinkFor, permalinkFromHref } = await import(chrome.runtime.getURL("src/shortcode.js")));
     ({ selectContainers } = await import(chrome.runtime.getURL("src/containers.js")));
     ({ createGrabTracker } = await import(chrome.runtime.getURL("src/grabTracker.js")));
     ({ grabUrlFor } = await import(chrome.runtime.getURL("src/slideIndex.js")));
+    ({ findSaveButton, saveAnchorPosition } = await import(chrome.runtime.getURL("src/actionBar.js")));
     console.debug("[carabiner] modules loaded");
   } catch (e) {
     console.debug("[carabiner] module import failed:", e && e.message);
     return; // no modules, no button — never throw into the page.
   }
 
-  // 32, not the original 28: the rest glyph is the Carabiner mark (see MARK below), which
-  // is fine-line art and fills in solid below roughly 24px. 32/22 is the largest the button
-  // goes before it starts covering the post itself — it does not make the mark *legible*
-  // (only a simplified mark would), it just stops it reading as a smudge. The ring shares
-  // this size, so it grows with it.
-  const SIZE = 32;
+  // 24, matching the size of Instagram's own action-bar icons, because the button now sits
+  // in that row beside Save rather than floating in the post's corner (2026-08-19). This is
+  // a deliberate trade against the note that used to live here: the rest glyph is the
+  // Carabiner mark, fine-line art that fills in solid below roughly 24px, and 32 was chosen
+  // to keep it from reading as a smudge. 24 sits exactly on that boundary — it buys
+  // belonging in the row at the cost of the mark's last legibility. If it ever reads as a
+  // blob, the fix is a simplified mark at this size, NOT a larger button, which would look
+  // like an add-on wedged into Instagram's UI. The ring shares this size.
+  const SIZE = 24;
+  // Space between our button and the Save icon it sits beside.
+  const ANCHOR_GAP = 8;
   // Kept on each overlay host purely as an identifying mark (tests and debugging query
   // it). Dedup no longer reads it — that is the `buttons` Map's job now.
   const HOST_MARK = "data-carabiner-host";
@@ -235,6 +242,27 @@
     // when the position actually changed, so a still page costs two rect reads and no
     // style work per frame per button.
     let lastX = null, lastY = null, lastShown = false;
+    // The Save button this one sits beside, resolved lazily and cached. Re-resolved only
+    // when it goes missing, because place() runs every animation frame for every button and
+    // a querySelectorAll per frame per button is exactly the kind of cost that makes a page
+    // feel heavy. `isConnected` is the re-resolve trigger: React swaps these nodes out on
+    // re-render, and a detached element's rect is all zeros, which would park the button at
+    // the top-left of the viewport instead of on the post.
+    let saveEl = null;
+    let lastMiss = 0;
+    const MISS_RETRY_MS = 1000;
+    const resolveSave = () => {
+      if (saveEl && saveEl.isConnected) return saveEl;
+      // Rate-limit the misses. A profile-grid thumbnail genuinely has no action bar, so
+      // without this every grid button would re-scan its container 60 times a second
+      // forever, searching for something that is never going to be there.
+      const now = Date.now();
+      if (!saveEl && now - lastMiss < MISS_RETRY_MS) return null;
+      saveEl = findSaveButton(container);
+      if (!saveEl) lastMiss = now;
+      return saveEl;
+    };
+
     const place = () => {
       const r = container.getBoundingClientRect();
       const shown = r.width >= SIZE + 16 && r.height >= SIZE + 16
@@ -242,7 +270,21 @@
         && r.right > 0 && r.left < window.innerWidth;
       if (shown !== lastShown) { host.style.display = shown ? "" : "none"; lastShown = shown; }
       if (!shown) return;
-      const x = Math.round(r.right - SIZE - 8), y = Math.round(r.top + 8);
+
+      // Beside Save when this post has an action bar; the post's top-right corner when it
+      // does not. The fallback is deliberate and must stay: a profile grid has no bar at
+      // all, and if Instagram reshapes its markup the button has to move back to the corner
+      // rather than disappear (a missing button is indistinguishable from a broken
+      // extension — the failure mode this project keeps paying for).
+      let x, y;
+      const save = resolveSave();
+      const s = save && save.getBoundingClientRect();
+      if (s && s.width > 0 && s.height > 0) {
+        ({ x, y } = saveAnchorPosition(s, SIZE, ANCHOR_GAP));
+      } else {
+        x = Math.round(r.right - SIZE - 8);
+        y = Math.round(r.top + 8);
+      }
       if (x !== lastX || y !== lastY) {
         host.style.transform = `translate(${x}px,${y}px)`;
         lastX = x; lastY = y;

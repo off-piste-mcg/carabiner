@@ -382,3 +382,80 @@ test("swiping does not rebind the button — the slide index is not baked into t
                "the dedup key, this rescan would compute a different url, see " +
                "existing.url !== url, and destroy/recreate the button");
 });
+
+// --- Placement (2026-08-19) -------------------------------------------------------------
+// The button moved from the post's top-right corner to beside Instagram's Save icon. These
+// pin the WIRING, which actionBar.test.js cannot: findSaveButton() can be perfect while
+// place() never calls it, and the corner placement would look entirely correct in every
+// other test (gotcha #34 — the reason the hardcoded-.chrome onboarding bug shipped).
+//
+// The markup here is synthetic ON PURPOSE, unlike actionBar.test.js's, which runs against
+// the real captured fixtures. What is being tested here is "does place() anchor to whatever
+// findSaveButton returns", not "does the selector match Instagram" — that second question
+// is only honestly answerable against real markup, and is answered there.
+
+const ACTION_BAR_HTML = `<!doctype html><body><article>
+  <a href="/p/C1a2b3c4/">post</a>
+  <section>
+    <div role="button"><svg></svg></div>
+    <div role="button"><svg></svg></div>
+    <div role="button"><svg></svg></div>
+    <div role="button" data-test="save"><svg></svg></div>
+  </section>
+</article></body>`;
+
+/** jsdom has no layout, so every rect is zeros until stubbed. */
+function stubRect(el, rect) {
+  el.getBoundingClientRect = () => ({
+    left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+    width: rect.right - rect.left, height: rect.bottom - rect.top, x: rect.left, y: rect.top,
+  });
+}
+
+async function transformAfterScroll(ctx, host) {
+  ctx.window.dispatchEvent(new ctx.window.Event("scroll"));
+  return waitFor(() => (host.style.transform ? host.style.transform : null));
+}
+
+test("the button is placed beside Save when the post has an action bar", async () => {
+  const ctx = await loadContentScript(ACTION_BAR_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const container = ctx.document.querySelector("article");
+  const save = ctx.document.querySelector('[data-test="save"]');
+  stubRect(container, { left: 100, top: 50, right: 700, bottom: 900 });
+  stubRect(save, { left: 640, top: 800, right: 664, bottom: 824 });
+
+  const transform = await transformAfterScroll(ctx, host);
+  // 640 - 24 (button) - 8 (gap) = 608; same height as the icon, so the same top.
+  assert.equal(transform, "translate(608px,800px)");
+});
+
+test("a post with no action bar keeps the old top-right corner placement", async () => {
+  // The fallback contract: a profile-grid thumbnail has no bar, and neither would a post
+  // whose markup Instagram reshaped. The button must move, never vanish.
+  const ctx = await loadContentScript(SINGLE_POST_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const container = ctx.document.querySelector('a[href="/p/C1a2b3c4/"]');
+  stubRect(container, { left: 100, top: 50, right: 700, bottom: 900 });
+
+  const transform = await transformAfterScroll(ctx, host);
+  // 700 - 24 - 8 = 668, and 50 + 8 = 58.
+  assert.equal(transform, "translate(668px,58px)");
+});
+
+test("a detached Save button falls back to the corner instead of parking at 0,0", async () => {
+  // React swaps these nodes out on re-render. A detached element's rect is all zeros, and
+  // anchoring to it would put the button in the viewport's top-left corner — visibly wrong,
+  // and on a page nowhere near the post it belongs to.
+  const ctx = await loadContentScript(ACTION_BAR_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const container = ctx.document.querySelector("article");
+  stubRect(container, { left: 100, top: 50, right: 700, bottom: 900 });
+  ctx.document.querySelector("section").remove();
+
+  const transform = await transformAfterScroll(ctx, host);
+  assert.equal(transform, "translate(668px,58px)");
+});
