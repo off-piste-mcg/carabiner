@@ -97,6 +97,12 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   download/item/convert marker (`ProgressEvent.beginsActivity`) — during the carousel
   probe and the dialog there is no ring, and the working banner is the immediate
   feedback instead. See `docs/superpowers/specs/2026-07-31-menu-bar-progress-ring-design.md`.
+  A **Launch at login** row (`SMAppService.mainApp`, added 2026-08-19) keeps Carabiner
+  running so the extension's cold-launch prompt stays rare — Chrome's "Open Carabiner?"
+  dialog has no "always allow" checkbox, so without it every cold launch asks. Off by
+  default. Unlike every other row it can revoke itself (`unregister()` is real, where macOS
+  offers no way to hand a TCC grant back), which is why `ToggleIntent` has a `.revoke` case.
+  See gotcha #40 for the mapping that made it unreachable at first.
   First launch opens a branded **Setup & Permissions** window (reopenable via the
   status menu): per-permission Allow rows with live status — notifications, browser
   Automation (launches the browser first; the OS can neither prompt nor report for a
@@ -118,7 +124,14 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   The app and the Shortcut cannot share a hotkey (gotcha #14) — pick one.
 - **`extension/`** — **the in-page Instagram button (MV3, one source tree, two builds).**
   A content script finds post containers, derives the permalink and injects a button in a
-  **shadow root**; the background service worker — and only it, see gotcha #30 — POSTs
+  **shadow root** — positioned since 2026-08-19 **beside Instagram's Save icon** in the
+  action row (feed and post pages alike), falling back to the post's top-right corner where
+  there is no action bar, as on a profile grid. Save is found structurally by
+  `src/actionBar.js` (first `<section>` with ≥3 outermost icon buttons; Save is the last),
+  never by `aria-label`, which is localized. The button is 24px to match Instagram's own
+  icons — exactly the size at which the mark stops being legible, so if it ever reads as a
+  blob, simplify the mark rather than growing the button.
+  The background service worker — and only it, see gotcha #30 — POSTs
   `{url, browser}` to the app at **`http://127.0.0.1:51847/grab`** and reads back an NDJSON
   stream of the same `::progress:` events that drive the menu-bar ring, which the button
   renders as its own ring. `GET /health` is how the app learns a browser's extension is
@@ -1449,6 +1462,40 @@ from the URL for "just this slide".
       prints `cssText` therefore shows the property missing and invites a completely wrong
       diagnosis (it cost one here — "jsdom drops transform" was asserted, then measured
       false a minute later).
+
+40. **`SMAppService.mainApp.status` is `.notFound` BEFORE the first registration — treat it
+    as "not registered yet", not as an error, or registration becomes unreachable.** Found
+    2026-08-19 building the Launch at login row. Toggling it opened System Settings and did
+    nothing; Carabiner never appeared under "Open at Login".
+
+    The cause was our own status mapping, not macOS. `.notFound` was mapped to `.denied`,
+    on the reasoning that a state we do not understand must never render as a tick. That
+    reasoning is right and the mapping was still wrong: `.denied`'s action is "Open System
+    Settings", so the toggle deep-linked to a pane Carabiner was not listed in, and
+    **`register()` was never called even once.** The one action that would have revealed
+    whether registration works was unreachable behind a defensive branch.
+
+    `sudo sfltool dumpbtm | grep -i carabiner` is the decisive instrument: it prints
+    macOS's Background Task Management records, and **empty output means no record at all**
+    — which rules out `.requiresApproval` (that state requires a record) and leaves
+    `.notFound`. Note it needs root, so it is a command to hand to the user, not to run.
+
+    `.notFound` now maps to `.notDetermined`: still not a claim of success, but the toggle
+    genuinely calls `register()` and the row re-reads the real status afterwards. Measured
+    immediately after the change: `before=notFound threw=no after=enabled`, the row turned
+    green, and the item appeared in Login Items & Extensions.
+
+    The general lesson, which is the reusable part: **a dead end is not more honest than an
+    attempt.** Refusing to act on an unknown state protects you from a false tick, but it
+    also destroys the evidence you would need to understand the state — and it presents to
+    the user as a button that does nothing, which is this project's worst failure shape
+    (gotcha #37). Prefer "try, then report what actually happened".
+
+    Two smaller facts from the same work: the login-item deep link is
+    `x-apple.systempreferences:com.apple.LoginItems-Settings.extension` (verified by
+    reading the window title back — it returns `Login Items & Extensions`), and the
+    "Open at Login" list is at the TOP of that pane, above "Extensions", which is easy to
+    scroll past when checking whether registration worked.
 
 ## Dependencies
 
