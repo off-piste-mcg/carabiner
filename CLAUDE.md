@@ -125,12 +125,20 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
 - **`extension/`** — **the in-page Instagram button (MV3, one source tree, two builds).**
   A content script finds post containers, derives the permalink and injects a button in a
   **shadow root** — positioned since 2026-08-19 **beside Instagram's Save icon** in the
-  action row (feed and post pages alike), falling back to the post's top-right corner where
-  there is no action bar, as on a profile grid. Save is found structurally by
-  `src/actionBar.js` (first `<section>` with ≥3 outermost icon buttons; Save is the last),
-  never by `aria-label`, which is localized. The button is 24px to match Instagram's own
-  icons — exactly the size at which the mark stops being legible, so if it ever reads as a
-  blob, simplify the mark rather than growing the button.
+  action row (feed, post pages and the post modal alike), falling back to the post's
+  top-right corner where there is no action bar, as on a profile grid. Save is found
+  structurally by `src/actionBar.js` (first `<section>` with ≥3 outermost icon buttons; Save
+  is the last), never by `aria-label`, which is localized. The button is 24px to match
+  Instagram's own icons — exactly the size at which the mark stops being legible, so if it
+  ever reads as a blob, simplify the mark rather than growing the button.
+  Three placement facts, all earned from user reports on 2026-08-19/20 and all verified in
+  a real browser (Wisse, Chrome) — see gotcha #41 for the reasoning behind each:
+  buttons are anchored in **document** coordinates, not viewport ones, so the browser
+  scrolls them with the page instead of this script chasing it; a button **hides while a
+  `[role=dialog]` covers its post**, because geometry alone cannot see occlusion and the
+  overlay outranks anything Instagram can draw; and the **post modal has its own button**
+  again, reversing the 2026-08-17 exclusion now that placement can anchor to Save rather
+  than the close X.
   The background service worker — and only it, see gotcha #30 — POSTs
   `{url, browser}` to the app at **`http://127.0.0.1:51847/grab`** and reads back an NDJSON
   stream of the same `::progress:` events that drive the menu-bar ring, which the button
@@ -387,13 +395,14 @@ while the app release is newest — publish future `deps-*` releases as **pre-re
 they will steal the link and send teammates to a release with no DMG in it.
 
 **The browser extension: WORKING in both browsers, not yet shipped (verified 2026-08-16,
-branch `feat/browser-extension`).** `extension/`'s offline suite is **112/112** (`node
+branch `feat/browser-extension`).** `extension/`'s offline suite is **118/118** (`node
 --test` from `extension/`). Two notes on that number, because it has been wrong here
 before: the figure recorded until 2026-08-17 was 64, and the real count at that moment was
 67 — an implementer measured it, so trust `node --test` over this line. 89 was the
 carousel slide-index work (below); the jump to 101 is the cold-launch fix (gotcha #38),
 which added `src/launch.js` plus its tests; 112 adds `src/actionBar.js` and the first
-tests placement has ever had.
+tests placement has ever had; 118 is the overlay trio in gotcha #41 (occlusion, document
+coordinates, the modal's button back).
 
 **The button grabs the slide you are looking at, since 2026-08-17.** It did not before, and
 the failure was the bad kind: swipe a feed carousel to slide 2, answer the dialog with
@@ -440,9 +449,17 @@ What a human has actually verified:
   Safari-only misbehaviour.
   The **Chrome onboarding row is verified green** as of 2026-08-18 — the first time it
   could be, since `ping()`'s bare GET had always been 403'd (gotcha #38).
+- **Verified 2026-08-20 (Wisse, Chrome):** the three overlay fixes in gotcha #41, each
+  reported by a user and confirmed fixed in a real browser — grid buttons no longer paint
+  over the open post modal, the button no longer lags the page on scroll, and the modal has
+  its own button beside Save again. The last of those also retired the risk flagged when it
+  shipped: `findSaveButton` picks the modal's action bar, not a comment's like button,
+  even though the comment list precedes the bar in DOM order. **Chrome only** — Safari has
+  none of the three until `xcodebuild` + reinstall, since the appex ships a build-time copy
+  (the 2026-08-18 entry above is the standing warning about exactly this).
 - **NOT yet verified:** item 10 (dialog-left-open patience) and 17 (the Safari→Chrome
   cookie fallback end to end, which needs FDA revoked and therefore another OS-forced
-  relaunch).
+  relaunch). Also unverified: gotcha #41's three fixes in **Safari**.
 
 What is left before shipping, needing a human with a Google account:
 
@@ -1317,7 +1334,8 @@ from the URL for "just this slide".
 
     The fix is structural, not probabilistic: all buttons live in one
     `<carabiner-overlay>` off `documentElement` (beside `<body>`, outside anything React
-    hydrates), `position:fixed`, placed over posts by `getBoundingClientRect` geometry —
+    hydrates), `position:absolute` (it was `fixed` until 2026-08-20 — gotcha #41 explains
+    why that changed), placed over posts by `getBoundingClientRect` geometry —
     repositioned on scroll (capture:true — Instagram scrolls inner elements)/resize/
     mutation, rAF-coalesced, never a free-running loop (battery, and it held the test
     process open forever). Dedup is a Map keyed by container element, which surfaces the
@@ -1496,6 +1514,69 @@ from the URL for "just this slide".
     reading the window title back — it returns `Login Items & Extensions`), and the
     "Open at Login" list is at the TOP of that pane, above "Extensions", which is easy to
     scroll past when checking whether registration worked.
+
+41. **An overlay that escapes the page's DOM inherits three problems the page used to solve
+    for you: occlusion, scrolling, and stacking. All three arrived as user reports within
+    36 hours of each other (2026-08-19/20), and none of them is a z-index bug.** Gotcha #36
+    moved every button out of Instagram's React tree into a `<carabiner-overlay>` on
+    `documentElement` at `z-index:2147483000`. That was right and must stay. What it also
+    did — invisibly — was opt out of everything the browser does for an element that lives
+    where it is drawn.
+
+    - **Occlusion.** `place()` judged visibility from the container's own geometry: big
+      enough, and intersecting the viewport. Open a post from a profile grid and the grid's
+      anchors stay connected, sized and in-viewport *behind* the modal, so every tile's
+      button stayed "visible" — and an overlay deliberately ranked above anything Instagram
+      can draw paints them **on top of the open post**. Fixed by also requiring that no
+      `[role=dialog]` rect overlaps the container. The rule is **occlusion, not "a dialog
+      exists"**: Instagram keeps small `role=dialog` furniture around (the messages panel,
+      the `...` menu), and hiding every button whenever any of them opens would make the
+      button vanish with no visible cause — this project's worst failure shape (gotcha #37).
+      A zero-size dialog is skipped for the same reason.
+    - **Self-occlusion, the trap inside the fix.** A dialog occludes what is BEHIND it,
+      never what is INSIDE it. The post modal's own button is inside the modal and overlaps
+      it by definition, so the rule above hides it instantly and silently unless occluders
+      that `contains()` the container are skipped. Adding a button to the modal (below) and
+      the occlusion rule are therefore *coupled*: neither is correct alone.
+    - **Scrolling.** Reported as "the icon is moving a bit later than the actual site".
+      Structural, and no amount of rAF scheduling fixes it: Instagram scrolls on the
+      **compositor thread**, while a viewport-positioned overlay only moves when
+      main-thread JS runs, so it is permanently catching up. The fix is to stop positioning
+      in viewport space — the overlay and its hosts are `position:absolute` and `place()`
+      adds `window.scrollX/scrollY`, anchoring in **document** coordinates. `<html>` is
+      unpositioned, so the containing block is the initial containing block at the document
+      origin. Window scrolling then changes the viewport rect and the scroll offset by the
+      same amount, the sum is unchanged, nothing is written, and there is nothing to lag —
+      the browser carries the button, on the compositor. Everything *above* the conversion
+      still reasons in viewport space, which is correct: the in-viewport test, the size test
+      and the occlusion test all want viewport rects. Inner scrollers still need the
+      main-thread correction they always had, which is why the scroll listener stays
+      `capture:true`.
+      **Do not "tidy" either element back to `position:fixed`.** That applies a
+      document-space transform in viewport space and parks the button hundreds of pixels off
+      on a scrolled page — much louder than the lag it replaced, and pinned by a test.
+
+    **Also settled here: the post modal has a button again, reversing 8c59ddc.** That
+    exclusion was correct when written — placement was corner-only, and the modal's
+    `<article>` spans essentially the viewport, so "the container's top-right" was the
+    top-right of the SCREEN, landing on Instagram's close X and making the post
+    impossible to close. `actionBar.js` (2026-08-19) changed the premise by anchoring
+    beside Save, which the modal has. The corner fallback survives for unrecognised markup
+    and drops `DIALOG_CORNER_DROP` (56px) inside a dialog to clear the X — one rule
+    everywhere, and a markup change demotes the position rather than removing the button.
+    Deciding *what can have a button* (`containers.js`) and *whether it is visible*
+    (`place()`'s occlusion test) are now cleanly separate jobs; the old exclusion conflated
+    them.
+
+    **The general lesson.** Each of these reads like a CSS or z-index problem and none of
+    them is. Leaving the page's DOM buys structural safety from React (gotcha #36) and
+    silently hands you the page's own responsibilities: what covers what, what moves when,
+    and what is drawn on top. Expect the next one to arrive the same way — as a user report
+    that sounds cosmetic.
+
+    All three verified in a real browser by Wisse (Chrome, 2026-08-20) — which also
+    retired the risk flagged at the time: `findSaveButton` does pick the modal's action bar
+    and not a comment's like button, despite the comment list preceding it in DOM order.
 
 ## Dependencies
 
