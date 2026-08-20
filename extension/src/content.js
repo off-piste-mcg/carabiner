@@ -114,7 +114,13 @@
   function overlayRoot() {
     if (overlay && overlay.isConnected) return overlay;
     overlay = document.createElement("carabiner-overlay");
-    overlay.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;z-index:2147483000;";
+    // position:absolute, NOT fixed, and this is the whole anti-lag mechanism — see the
+    // note on place() below. <html> is unpositioned, so an absolute child's containing
+    // block is the initial containing block, which is anchored at the DOCUMENT origin.
+    // top/left 0 therefore means "document 0,0", and a child placed at document
+    // coordinates is carried by the browser's own scrolling, on the compositor, with no
+    // JavaScript in the loop. 0×0 so it can never affect layout or add scrollable area.
+    overlay.style.cssText = "position:absolute;top:0;left:0;width:0;height:0;z-index:2147483000;";
     document.documentElement.appendChild(overlay);
     return overlay;
   }
@@ -125,7 +131,8 @@
     const host = document.createElement("div");
     // left/top stay 0; place() moves the host with a transform, the cheapest style
     // write there is. pointer-events:auto because the overlay parent is 0×0.
-    host.style.cssText = "position:fixed;left:0;top:0;z-index:2147483000;pointer-events:auto;display:none;";
+    // absolute, matching the overlay — the transform is in document coordinates.
+    host.style.cssText = "position:absolute;left:0;top:0;z-index:2147483000;pointer-events:auto;display:none;";
     const root = host.attachShadow({ mode: "closed" });
     root.innerHTML = `
       <style>
@@ -288,6 +295,26 @@
         x = Math.round(r.right - SIZE - 8);
         y = Math.round(r.top + 8);
       }
+
+      // Viewport coordinates -> DOCUMENT coordinates. Everything above reasons in viewport
+      // space (getBoundingClientRect, the in-viewport test, the occlusion test), which is
+      // correct — but writing the result in viewport space is what made the button lag the
+      // page on scroll. Instagram scrolls on the compositor thread; a viewport-positioned
+      // element only moves when this main-thread code runs, so it is permanently catching
+      // up and can never move WITH the page.
+      //
+      // Anchored in document space instead, the browser carries the button along with the
+      // page itself for free: window scrolling changes the viewport rect and scrollX/scrollY
+      // by the same amount, so the sum is unchanged, nothing is written, and there is
+      // nothing to lag. What still needs correcting is anything that moves a post WITHIN
+      // the document — an inner scroller (Instagram uses them, which is why the scroll
+      // listener is capture:true), a resize, a re-render — and those keep the exact
+      // frame-coalesced path they had before. So this is strictly better than viewport
+      // space, never worse: it deletes the lag for the common case and leaves the rest
+      // unchanged.
+      x += window.scrollX;
+      y += window.scrollY;
+
       if (x !== lastX || y !== lastY) {
         host.style.transform = `translate(${x}px,${y}px)`;
         lastX = x; lastY = y;

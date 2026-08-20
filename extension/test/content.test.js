@@ -460,6 +460,50 @@ test("a detached Save button falls back to the corner instead of parking at 0,0"
   assert.equal(transform, "translate(668px,58px)");
 });
 
+/** jsdom reports scrollX/scrollY as 0 and has no real scrolling; this fakes a scrolled page. */
+function stubScroll(window, { x = 0, y = 0 }) {
+  Object.defineProperty(window, "scrollX", { value: x, configurable: true });
+  Object.defineProperty(window, "scrollY", { value: y, configurable: true });
+}
+
+test("the button is anchored in document coordinates, so the browser scrolls it, not us", async () => {
+  // User report (2026-08-19): "when i scroll, the icon is moving a bit later than the
+  // actual site". Instagram scrolls on the compositor thread; a viewport-positioned
+  // element only moves when this main-thread code runs, so it can only ever catch up.
+  // Anchoring in document space hands the movement to the browser: the viewport rect and
+  // scrollY change by the same amount, the sum does not, and there is nothing to lag.
+  //
+  // Without the scroll offsets this test is invisible — jsdom's scrollX/scrollY are 0, so
+  // document and viewport coordinates coincide and every other placement test passes
+  // either way. That is exactly the gap this pins.
+  const ctx = await loadContentScript(SINGLE_POST_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const container = ctx.document.querySelector('a[href="/p/C1a2b3c4/"]');
+  stubScroll(ctx.window, { x: 40, y: 500 });
+  // Viewport rect of a post 500px down a scrolled page.
+  stubRect(container, { left: 100, top: 50, right: 700, bottom: 900 });
+
+  const transform = await transformAfterScroll(ctx, host);
+  // Corner placement is 700-24-8 = 668 and 50+8 = 58 in viewport space, plus the scroll
+  // offsets: 668+40 = 708, 58+500 = 558.
+  assert.equal(transform, "translate(708px,558px)");
+});
+
+test("the overlay and its buttons are absolutely positioned, not fixed", async () => {
+  // The document-coordinate transform above is only carried by the browser's own scrolling
+  // if the elements are absolute. Leave either one `fixed` and the transform is applied in
+  // viewport space, which parks the button hundreds of pixels off on a scrolled page — a
+  // much louder bug than the lag it replaced, so it is worth pinning both.
+  const ctx = await loadContentScript(SINGLE_POST_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+  const overlay = ctx.document.querySelector("carabiner-overlay");
+
+  assert.equal(overlay.style.position, "absolute");
+  assert.equal(host.style.position, "absolute");
+  assert.equal(overlay.parentElement, ctx.document.documentElement, "must stay outside <body>");
+});
+
 /** A profile grid tile that lives OUTSIDE the modal, plus the modal itself. */
 const GRID_WITH_MODAL_HTML = `<!doctype html><body>`
   + `<a href="/paulhumphriess/p/C1a2b3c4/">tile</a>`
