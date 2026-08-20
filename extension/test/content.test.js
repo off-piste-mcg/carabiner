@@ -459,3 +459,56 @@ test("a detached Save button falls back to the corner instead of parking at 0,0"
   const transform = await transformAfterScroll(ctx, host);
   assert.equal(transform, "translate(668px,58px)");
 });
+
+/** A profile grid tile that lives OUTSIDE the modal, plus the modal itself. */
+const GRID_WITH_MODAL_HTML = `<!doctype html><body>`
+  + `<a href="/paulhumphriess/p/C1a2b3c4/">tile</a>`
+  + `<div role="dialog" data-test="modal"><article>the open post</article></div>`
+  + `</body>`;
+
+test("a grid button hides when the post modal covers it — the overlay outranks Instagram's z-index", async () => {
+  // User report (2026-08-19): open a profile grid, click a tile, and the grid's Carabiner
+  // marks are still painted ON TOP of the post modal. 8c59ddc stopped us putting a button
+  // INSIDE the dialog, but deliberately kept the tiles behind it alive ("a filter, not a
+  // page-level bail-out") — and since the overlay sits on documentElement at
+  // z-index 2147483000, above anything Instagram can produce, "still alive" means "drawn
+  // over the modal". place() judged visibility from the container's own geometry alone,
+  // which cannot see occlusion.
+  const ctx = await loadContentScript(GRID_WITH_MODAL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const tile = ctx.document.querySelector('a[href="/paulhumphriess/p/C1a2b3c4/"]');
+  const modal = ctx.document.querySelector('[data-test="modal"]');
+  stubRect(tile, { left: 100, top: 600, right: 400, bottom: 900 });
+
+  // Modal closed first: a zero-size dialog rect must NOT hide anything, or this test
+  // could pass for the wrong reason (jsdom starts every rect at zeros).
+  stubRect(modal, { left: 0, top: 0, right: 0, bottom: 0 });
+  await transformAfterScroll(ctx, host);
+  assert.equal(host.style.display, "", "tile button should be visible while no modal covers it");
+
+  // Modal open, covering the tile.
+  stubRect(modal, { left: 0, top: 0, right: 1000, bottom: 1000 });
+  ctx.window.dispatchEvent(new ctx.window.Event("scroll"));
+  await waitFor(() => host.style.display === "none" || null);
+  assert.equal(host.style.display, "none", "tile button must hide behind the open modal");
+});
+
+test("a dialog that does not overlap a post leaves its button alone", async () => {
+  // The rule is occlusion, not "a dialog exists". Instagram keeps small [role=dialog]
+  // furniture around (the messages panel, the ... menu); hiding every button whenever any
+  // of them is open would make the button vanish for no visible reason — this project's
+  // worst failure shape, since a missing button reads as a broken extension.
+  const ctx = await loadContentScript(GRID_WITH_MODAL_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const tile = ctx.document.querySelector('a[href="/paulhumphriess/p/C1a2b3c4/"]');
+  const modal = ctx.document.querySelector('[data-test="modal"]');
+  stubRect(tile, { left: 100, top: 600, right: 400, bottom: 900 });
+  // A panel down in the bottom-right corner, nowhere near the tile.
+  stubRect(modal, { left: 1200, top: 950, right: 1500, bottom: 1050 });
+
+  const transform = await transformAfterScroll(ctx, host);
+  assert.equal(host.style.display, "", "a non-overlapping dialog must not hide the button");
+  assert.equal(transform, "translate(368px,608px)");
+});

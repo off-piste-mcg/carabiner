@@ -263,11 +263,14 @@
       return saveEl;
     };
 
-    const place = () => {
+    const place = (occluders = occluderRects()) => {
       const r = container.getBoundingClientRect();
       const shown = r.width >= SIZE + 16 && r.height >= SIZE + 16
         && r.bottom > 0 && r.top < window.innerHeight
-        && r.right > 0 && r.left < window.innerWidth;
+        && r.right > 0 && r.left < window.innerWidth
+        // ...and nothing is covering it. Geometry alone cannot see occlusion, which is
+        // what put the grid's marks on top of the post modal — see occluderRects().
+        && !isOccluded(r, occluders);
       if (shown !== lastShown) { host.style.display = shown ? "" : "none"; lastShown = shown; }
       if (!shown) return;
 
@@ -294,6 +297,42 @@
     return { host, place };
   }
 
+  // Rects of anything drawn OVER the page. Instagram's post modal (profile grid → click a
+  // tile) is a [role=dialog] laid across the grid, and the grid's containers stay
+  // connected, sized and in-viewport behind it — so a purely geometric visibility test
+  // keeps their buttons alive, and the overlay's z-index 2147483000 (above anything
+  // Instagram can produce) then paints them ON TOP of the open post. That was a real user
+  // report, 2026-08-19.
+  //
+  // 8c59ddc already stopped us putting a button *inside* the dialog, and deliberately kept
+  // the tiles behind it — "a filter, not a page-level bail-out". That half was right; what
+  // it missed is that surviving the filter is not the same as being visible.
+  //
+  // The rule is OCCLUSION, not "a dialog exists anywhere". Instagram keeps small
+  // [role=dialog] furniture around (the messages panel, the ... menu), and hiding every
+  // button whenever any of them opens would make the button vanish with no visible cause —
+  // the failure shape this project keeps paying for (gotcha #37). A zero-size dialog is
+  // skipped for the same reason: a closed or unrendered one must not hide anything.
+  //
+  // Computed once per frame in reapAndPlace() rather than per button: place() runs for
+  // every live button on every scroll frame, and a querySelectorAll each time is exactly
+  // the cost resolveSave() above is rate-limited to avoid.
+  function occluderRects() {
+    const out = [];
+    for (const d of document.querySelectorAll("[role=dialog]")) {
+      const r = d.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) out.push(r);
+    }
+    return out;
+  }
+
+  function isOccluded(r, occluders) {
+    for (const o of occluders) {
+      if (o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top) return true;
+    }
+    return false;
+  }
+
   // Reposition every live button and reap the ones whose container React re-rendered
   // away (disconnected element → remove ours and the Map entry; the next mutation-driven
   // scan re-attaches to the replacement). Deliberately NOT a free-running rAF loop:
@@ -305,13 +344,14 @@
   // button between events; Instagram's layout moves are not that, and stillness costs
   // nothing this way.
   function reapAndPlace() {
+    const occluders = occluderRects();   // one query per frame, shared by every button
     for (const [container, entry] of buttons) {
       if (!container.isConnected) {
         entry.host.remove();
         buttons.delete(container);
         continue;
       }
-      entry.place();
+      entry.place(occluders);
     }
   }
   let placeScheduled = false;
