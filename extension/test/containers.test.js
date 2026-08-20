@@ -114,15 +114,25 @@ test("a non-post anchor (profile, hashtag) is never selected as a container", ()
   assert.equal(selectContainers(doc).length, 0);
 });
 
-test("nothing inside a [role=dialog] is a container — the post modal owns its own chrome", () => {
-  // Measured live 2026-08-17 (profile grid → click a tile): Instagram wraps the post
-  // MODAL's whole content in an <article> that spans essentially the viewport
-  // (1600×859 of 1728×907 measured), so a button at that article's top-right landed at
-  // the top-right of the SCREEN, beside Instagram's own close X (ours 1624,32; the X
-  // 1489,23) — and the user could not close the post. The modal needs no button anyway:
-  // opening it rewrites the tab URL to the permalink, which is the hotkey's case.
-  // The grid tiles OUTSIDE the dialog must keep their buttons — that is the second half
-  // of this test, because the fix is a filter, not a page-level bail-out.
+test("the post modal IS a container — it gets a button like any other post", () => {
+  // Reversed 2026-08-20 on a user report ("when opening a post from a grid, i don't see
+  // the icon next to the save icon — so this way, i can't download it").
+  //
+  // The original exclusion (8c59ddc, 2026-08-17) was sound for its moment: Instagram wraps
+  // the modal's whole content in an <article> spanning essentially the viewport (1600×859
+  // of 1728×907, measured), and placement was corner-only then, so the button landed at
+  // the top-right of the SCREEN beside Instagram's close X (ours 1624,32; the X 1489,23)
+  // and the post could not be closed. Excluding the modal was the cheapest way out, and
+  // the hotkey covered it, since opening the modal rewrites the tab URL to the permalink.
+  //
+  // What changed is that placement is no longer corner-only. actionBar.js anchors beside
+  // Save, and the modal has a full action bar (like, comment, repost, share, Save), so the
+  // button now has a correct home there. The corner fallback carries a dialog-specific
+  // offset to clear the X — see place() in content.js.
+  //
+  // Both halves still matter: the modal's own post AND the grid tile behind it are
+  // containers. The tile keeps its button here at the container layer; whether it is
+  // VISIBLE while the modal covers it is place()'s occlusion test, not this filter's job.
   const doc = new JSDOM(`<!doctype html><body>
     <a href="/liverpoolfc/p/Db1111111/">tile behind the modal</a>
     <div role="dialog">
@@ -130,7 +140,8 @@ test("nothing inside a [role=dialog] is a container — the post modal owns its 
     </div>
   </body>`).window.document;
   const containers = selectContainers(doc);
-  assert.equal(containers.length, 1);
-  assert.equal(containers[0].tagName, "A");
+  assert.equal(containers.length, 2);
   assert.equal(containers[0].getAttribute("href"), "/liverpoolfc/p/Db1111111/");
+  // The dialog's <article> wins over the anchor nested inside it, exactly like a feed post.
+  assert.equal(containers[1].tagName, "ARTICLE");
 });

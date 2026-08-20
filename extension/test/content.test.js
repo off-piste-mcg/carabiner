@@ -538,6 +538,73 @@ test("a grid button hides when the post modal covers it — the overlay outranks
   assert.equal(host.style.display, "none", "tile button must hide behind the open modal");
 });
 
+/** The post modal: a [role=dialog] wrapping an <article>, plus a grid tile behind it. */
+const MODAL_POST_HTML = `<!doctype html><body>`
+  + `<a href="/marz.fay/p/Db1111111/">tile behind the modal</a>`
+  + `<div role="dialog" data-test="modal"><article>`
+  + `<a href="/p/Db2222222/">the open post</a>`
+  + `<section>`
+  + `<div role="button"><svg></svg></div>`
+  + `<div role="button"><svg></svg></div>`
+  + `<div role="button"><svg></svg></div>`
+  + `<div role="button" data-test="save"><svg></svg></div>`
+  + `</section>`
+  + `</article></div></body>`;
+
+/** The same modal with no action bar at all, forcing the corner fallback. */
+const MODAL_NO_BAR_HTML = `<!doctype html><body>`
+  + `<div role="dialog" data-test="modal"><article>`
+  + `<a href="/p/Db2222222/">the open post</a>`
+  + `</article></div></body>`;
+
+test("a dialog does not occlude its OWN post — the modal keeps its button", async () => {
+  // The trap this pins: yesterday's occlusion rule hides any button whose container
+  // overlaps a [role=dialog]. The modal's own post is INSIDE that dialog and therefore
+  // overlaps it completely, so a naive rule hides the one button the user actually asked
+  // for — instantly, and with no error. A dialog occludes what is behind it, never what is
+  // inside it.
+  const ctx = await loadContentScript(MODAL_POST_HTML);
+  await waitFor(() => ctx.document.querySelectorAll("[data-carabiner-host]").length === 2 || null);
+
+  const tile = ctx.document.querySelector('a[href="/marz.fay/p/Db1111111/"]');
+  const article = ctx.document.querySelector("article");
+  const modal = ctx.document.querySelector('[data-test="modal"]');
+  const save = ctx.document.querySelector('[data-test="save"]');
+  const hosts = ctx.document.querySelectorAll("[data-carabiner-host]");
+
+  stubRect(tile, { left: 100, top: 600, right: 400, bottom: 900 });
+  stubRect(modal, { left: 0, top: 0, right: 1000, bottom: 1000 });
+  stubRect(article, { left: 200, top: 20, right: 900, bottom: 980 });
+  stubRect(save, { left: 840, top: 900, right: 864, bottom: 924 });
+
+  ctx.window.dispatchEvent(new ctx.window.Event("scroll"));
+  await waitFor(() => (hosts[1].style.transform ? hosts[1].style.transform : null));
+
+  assert.equal(hosts[0].style.display, "none", "the grid tile behind the modal still hides");
+  assert.equal(hosts[1].style.display, "", "the modal's own post must keep its button");
+  // Beside Save: 840 - 24 - 8 = 808, centred on a same-height icon so the same top.
+  assert.equal(hosts[1].style.transform, "translate(808px,900px)");
+});
+
+test("the modal's corner fallback drops clear of Instagram's close X", async () => {
+  // 8c59ddc's bug, and why the offset exists: the modal's <article> spans nearly the whole
+  // viewport, so "top-right of the container" is the top-right of the SCREEN — exactly
+  // where Instagram's close X sits, and the post could no longer be closed. This path only
+  // runs if the action bar is missing, but that is precisely when it must not do harm.
+  const ctx = await loadContentScript(MODAL_NO_BAR_HTML);
+  const host = await waitFor(() => ctx.document.querySelector("[data-carabiner-host]"));
+
+  const article = ctx.document.querySelector("article");
+  const modal = ctx.document.querySelector('[data-test="modal"]');
+  stubRect(modal, { left: 0, top: 0, right: 1000, bottom: 1000 });
+  stubRect(article, { left: 200, top: 20, right: 900, bottom: 980 });
+
+  const transform = await transformAfterScroll(ctx, host);
+  // Plain corner would be 900-24-8 = 868 and 20+8 = 28 — right on the X. In a dialog the
+  // y drops by DIALOG_CORNER_DROP (56): 28 + 56 = 84.
+  assert.equal(transform, "translate(868px,84px)");
+});
+
 test("a dialog that does not overlap a post leaves its button alone", async () => {
   // The rule is occlusion, not "a dialog exists". Instagram keeps small [role=dialog]
   // furniture around (the messages panel, the ... menu); hiding every button whenever any

@@ -42,6 +42,10 @@
   const SIZE = 24;
   // Space between our button and the Save icon it sits beside.
   const ANCHOR_GAP = 8;
+  // How far the corner fallback drops inside a [role=dialog] to clear Instagram's close X,
+  // measured at 1489,23 on a 1728×907 viewport (8c59ddc). Big enough to clear a 40px hit
+  // target plus its inset; only ever used when the action bar could not be found.
+  const DIALOG_CORNER_DROP = 56;
   // Kept on each overlay host purely as an identifying mark (tests and debugging query
   // it). Dedup no longer reads it — that is the `buttons` Map's job now.
   const HOST_MARK = "data-carabiner-host";
@@ -277,7 +281,7 @@
         && r.right > 0 && r.left < window.innerWidth
         // ...and nothing is covering it. Geometry alone cannot see occlusion, which is
         // what put the grid's marks on top of the post modal — see occluderRects().
-        && !isOccluded(r, occluders);
+        && !isOccluded(container, r, occluders);
       if (shown !== lastShown) { host.style.display = shown ? "" : "none"; lastShown = shown; }
       if (!shown) return;
 
@@ -294,6 +298,14 @@
       } else {
         x = Math.round(r.right - SIZE - 8);
         y = Math.round(r.top + 8);
+        // Inside the post modal, "the container's top-right" is the top-right of the
+        // SCREEN — the modal's <article> spans nearly the whole viewport — and that is
+        // where Instagram puts its close X. Landing there made the post impossible to
+        // close (8c59ddc), which is why the modal was excluded outright for three days.
+        // Dropping below the X keeps one corner-fallback rule everywhere without the harm.
+        // Resolved here rather than cached at attach() because a post can be opened INTO a
+        // modal without its container being replaced.
+        if (container.closest("[role=dialog]")) y += DIALOG_CORNER_DROP;
       }
 
       // Viewport coordinates -> DOCUMENT coordinates. Everything above reasons in viewport
@@ -344,17 +356,24 @@
   // Computed once per frame in reapAndPlace() rather than per button: place() runs for
   // every live button on every scroll frame, and a querySelectorAll each time is exactly
   // the cost resolveSave() above is rate-limited to avoid.
+  // Carries the element alongside the rect because occlusion is not purely geometric — see
+  // isOccluded(). The modal's own post overlaps the modal completely.
   function occluderRects() {
     const out = [];
-    for (const d of document.querySelectorAll("[role=dialog]")) {
-      const r = d.getBoundingClientRect();
-      if (r.width > 0 && r.height > 0) out.push(r);
+    for (const el of document.querySelectorAll("[role=dialog]")) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) out.push({ el, rect });
     }
     return out;
   }
 
-  function isOccluded(r, occluders) {
-    for (const o of occluders) {
+  // A dialog occludes what is BEHIND it, never what is INSIDE it. Without the contains()
+  // check the modal's own button — the whole point of showing one there — would be hidden
+  // the instant it appeared, since a post inside the modal overlaps the modal by
+  // definition. Grid tiles behind it are not contained, so they still hide.
+  function isOccluded(container, r, occluders) {
+    for (const { el, rect: o } of occluders) {
+      if (el.contains(container)) continue;
       if (o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top) return true;
     }
     return false;
