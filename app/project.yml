@@ -163,6 +163,14 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.offpiste.carabiner
             CFBundleURLSchemes: [carabiner]
+        # Accepting public.url is what makes a link dragged onto the Dock tile arrive in
+        # application(_:open:) — document-type acceptance only, NOT a scheme-handler
+        # claim, so Carabiner never becomes a default-browser candidate. The allowlist
+        # (GrabGate.checkURL, via dockOpenAction) decides what actually starts a grab.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Web link
+            CFBundleTypeRole: Viewer
+            LSItemContentTypes: [public.url]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner

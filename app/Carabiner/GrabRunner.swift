@@ -9,6 +9,12 @@ struct GrabResult {
     /// `@handle` of the Instagram account the grab came from, when the engine reported
     /// one (`::progress:from:` marker). Decoration for the banner — nil is normal.
     var user: String? = nil
+    /// Every `✓ <what>` line the script announced, in order — filenames for Instagram,
+    /// `saved to ~/Downloads` for the YouTube/Pinterest/generic paths (so an entry is not
+    /// guaranteed to be a filename). `message` keeps its one-line summary; this exists for
+    /// the grab history, which needs the actual names. Default `[]` so every pre-existing
+    /// call site and test is unaffected.
+    var files: [String] = []
     /// Whether this failure was specifically yt-dlp/gallery-dl being denied the READ of a
     /// browser's cookie file (as opposed to, say, a deleted post or expired login). Default
     /// `false` so every pre-existing `GrabResult(...)` call site — including every test that
@@ -349,8 +355,8 @@ struct GrabRunner {
             let cancelled = outLines.contains("cancelled.")
             return GrabResult(ok: false, message: "Nothing saved", cancelled: cancelled)
         }
-        if saved.count == 1 { return GrabResult(ok: true, message: saved[0], user: user) }
-        return GrabResult(ok: true, message: "\(saved.count) files", user: user)
+        if saved.count == 1 { return GrabResult(ok: true, message: saved[0], user: user, files: saved) }
+        return GrabResult(ok: true, message: "\(saved.count) files", user: user, files: saved)
     }
 
     /// Non-empty, trimmed lines. Splits on `\r` as well as `\n`: yt-dlp writes its

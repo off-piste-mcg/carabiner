@@ -19,6 +19,10 @@ final class MenuBarController: NSObject {
     /// clicking "Grab current tab" can't fake a ✓.
     var hotkeyTestHandler: (() -> Void)?
     private var onboarding: OnboardingWindowController?
+    /// Every successful app-driven grab lands here (recorded in the shared grab path's
+    /// completion), and the main window renders it.
+    private let history = GrabHistoryStore()
+    private var mainWindow: MainWindowController?
     /// Set by App.swift once the listener starts. Weak: GrabServer's owner is App.swift,
     /// not this controller — this is read-only access for onboarding (task 9) to report
     /// the server's state, not a second owner.
@@ -45,6 +49,41 @@ final class MenuBarController: NSObject {
         // target here would leave AppKit's autoenablesItems disabling the item.
         menu.addItem(NSMenuItem(title: "Quit Carabiner", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    /// The Dock click's destination. Lazily built like onboarding; the model calls back
+    /// into the shared grab path, so a window grab and a hotkey grab are the same grab.
+    @objc func showMainWindow() {
+        if mainWindow == nil {
+            let model = MainViewModel(history: history)
+            model.isBusyElsewhere = { [weak self] in self?.busy ?? false }
+            model.onGrab = { [weak self] url in self?.grabFromWindow(url: url) }
+            mainWindow = MainWindowController(model: model)
+        }
+        mainWindow?.show()
+    }
+
+    /// A grab the main window submitted. The model already validated the URL and set its
+    /// own in-flight state; this posts the working banner (the window is a non-hotkey
+    /// caller, so it goes through notifyGrabStarted like GrabServer does) and feeds
+    /// progress and the outcome back to the model.
+    private func grabFromWindow(url: String) {
+        notifyGrabStarted()
+        grab(url: url, browser: Self.browser,
+             observer: { [weak self] event in self?.mainWindow?.model.handle(event) },
+             completion: { [weak self] result in self?.mainWindow?.model.grabFinished(result) })
+    }
+
+    /// A grab arriving from outside any window — today a URL dropped on the Dock icon.
+    /// Busy behaves like the hotkey path: log and drop (the working banner of the running
+    /// grab is already up; a second banner about refusing would upstage it).
+    func grabFromExternal(url: String) {
+        guard !busy else {
+            NSLog("Carabiner: dropped URL ignored — a grab is already running")
+            return
+        }
+        notifyGrabStarted()
+        grab(url: url, browser: Self.browser)
     }
 
     @objc func showOnboarding() {
@@ -202,6 +241,9 @@ final class MenuBarController: NSObject {
                 if let user = result.user { userObserver?(user) }
                 self.ring.finish(success: result.ok)
                 self.notifier.finished(result)
+                // The one recording point — hotkey, extension, window and Dock drop all
+                // funnel through here. The store ignores failures and cancels itself.
+                self.history.record(url: url, result: result)
                 self.busy = false
                 completion?(result)
             }

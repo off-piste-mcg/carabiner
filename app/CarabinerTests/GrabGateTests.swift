@@ -179,4 +179,29 @@ final class GrabGateTests: XCTestCase {
     func testCheckOriginRejectsBareLF() {
         XCTAssertNil(GrabGate.checkOrigin("chrome-extension://a\ninjected"))
     }
+
+    // `checkURL` is `check`'s URL half, extracted because the main window's Grab button
+    // and the Dock drop now consult it without an Origin in sight. These pin it directly
+    // — the origin-free surfaces must enforce exactly the rules `check`'s own tests
+    // already pin through the combined path.
+    func testCheckURLAcceptsAllowlistedHTTPS() {
+        XCTAssertEqual(GrabGate.checkURL("https://www.instagram.com/p/ABC/"),
+                       .ok(url: "https://www.instagram.com/p/ABC/"))
+    }
+    func testCheckURLRejectsPlainHTTP() {
+        XCTAssertEqual(GrabGate.checkURL("http://www.instagram.com/p/ABC/"),
+                       .rejected(status: 400, reason: "unusable url"))
+    }
+    func testCheckURLRejectsOffAllowlistAndLookalike() {
+        XCTAssertEqual(GrabGate.checkURL("https://example.com/x"),
+                       .rejected(status: 400, reason: "host not allowed"))
+        XCTAssertEqual(GrabGate.checkURL("https://instagram.com.evil.example/p/A/"),
+                       .rejected(status: 400, reason: "host not allowed"))
+    }
+    func testCheckURLRejectsNilAndJunk() {
+        XCTAssertEqual(GrabGate.checkURL(nil),
+                       .rejected(status: 400, reason: "unusable url"))
+        XCTAssertEqual(GrabGate.checkURL("not a url"),
+                       .rejected(status: 400, reason: "unusable url"))
+    }
 }

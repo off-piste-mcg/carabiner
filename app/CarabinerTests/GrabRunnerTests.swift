@@ -42,6 +42,8 @@ final class GrabRunnerTests: XCTestCase {
         let result = GrabRunner(executable: stub).run(url: "https://x/y")
         XCTAssertTrue(result.ok)
         XCTAssertEqual(result.message, "3 files")
+        // The summary loses the names; `files` is where the history finds them, in order.
+        XCTAssertEqual(result.files, ["ABC_s1.jpg", "ABC_s2.jpg", "ABC_s3.mp4"])
     }
 
     /// Cancelling the carousel prompt makes `carabiner` exit 0 having saved nothing,

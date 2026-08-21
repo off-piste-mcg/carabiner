@@ -65,6 +65,14 @@ enum GrabGate {
         guard checkOrigin(origin) != nil else {
             return .rejected(status: 403, reason: "origin not an extension")
         }
+        return checkURL(url)
+    }
+
+    /// The URL half of `check`, on its own because the extension is no longer the only
+    /// caller: the main window's Grab button and a URL dropped on the Dock icon route
+    /// through this same allowlist — one answer to "may Carabiner be pointed at this",
+    /// whichever surface asked.
+    static func checkURL(_ url: String?) -> GateVerdict {
         // https only: an extension only ever originates these four hosts over https, and
         // allowing plain http would widen the redirect seam described above to any
         // on-path attacker for zero legitimate benefit.
