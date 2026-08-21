@@ -82,7 +82,44 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   The shortcut's Run Shell Script uses a portable one-liner so it finds `carabiner` on
   both Apple Silicon (`/opt/homebrew`) and Intel (`/usr/local`).
 - **`app/`** — **`Carabiner.app`, the native Swift/AppKit menu-bar app (Phase 1 done).**
-  Menu-bar only (`LSUIElement`), OFF-PISTE logo status item, global ⌃⌥⌘V hotkey. The status
+  A **regular Dock app since 2026-08-21** (no more `LSUIElement`): Dock tile with the
+  running dot whenever it runs, pinnable via Options → Keep in Dock, and clicking the
+  Dock icon opens Setup & Permissions (`applicationShouldHandleReopen` — which
+  deliberately ignores `hasVisibleWindows`, because the status item is backed by a window
+  and the flag reads true with nothing on screen; measured, gating on it left the Dock
+  click doing nothing). A minimal main menu (app + Edit) fills the otherwise-empty menu
+  bar when frontmost. The app icon is `app/Carabiner/AppIcon.icon`, a hand-authored
+  Tahoe-native Icon Composer JSON (black fill, one flat white layer with the full
+  mark-and-rope from `Carabiner_logo.jpg`): macOS 26 puts legacy pre-rounded icon PNGs on
+  a gray backplate ring, which is why the old `AppIcon.appiconset` is gone — actool
+  generates the macOS ≤ 15 `.icns` fallback from the same file, and
+  `ASSETCATALOG_COMPILER_APPICON_NAME` is now explicit in `project.yml` (xcodegen only
+  infers it while an `.appiconset` exists). Layer `scale` in that JSON is native image
+  pixels per canvas point: the 2048px source on the 1024pt canvas needs 0.5 for
+  full-bleed. See `docs/superpowers/specs/2026-08-21-dock-app-design.md`.
+  The Dock click opens the **main window** (same day, second slice): a paste/drop grab
+  box validated through `GrabGate.checkURL` (the URL half of the extension's gate,
+  extracted so every surface shares one allowlist) plus the **recent-grabs history** —
+  `GrabHistoryStore`, last 50 successful app-driven grabs as JSON in
+  `~/Library/Application Support/Carabiner/`, recorded at the one funnel all grabs pass
+  (`MenuBarController.grab(url:browser:)`'s completion). Shortcut-path grabs bypass the
+  app and can never appear there. Setup & Permissions moved to a standard "Settings…"
+  ⌘, item (status-menu row and first-launch auto-open unchanged). A URL dropped on the
+  Dock tile grabs too: `CFBundleDocumentTypes` accepts `public.url` (document-type
+  acceptance, not a scheme claim) and `dockOpenAction` routes carabiner:// vs allowlisted
+  https vs junk. History rows for the YouTube/Pinterest paths render dimmed with no
+  thumbnail — the script announces `saved to ~/Downloads` there, not a filename; making
+  the engine announce real filenames on those paths is the natural follow-up. See
+  `docs/superpowers/specs/2026-08-21-main-window-design.md`.
+  **Found while verifying (2026-08-21), pre-existing and NOT caused by this work: the
+  bundled yt-dlp cannot grab YouTube any more.** Same version as Homebrew's (2026.07.04),
+  but YouTube now requires the `yt-dlp-ejs` JS-challenge component, which Homebrew's
+  install ships and our PyInstaller `--onedir` tree (deps-2026.07.1) does not — bundled
+  grabs see "Only images are available" and die with "Requested format is not available";
+  Instagram is unaffected. Fix belongs in `build-deps.yml` (include yt-dlp-ejs, new deps
+  release). Isolated with the CARABINER_BIN A/B: same URL, Homebrew PATH succeeds,
+  bundled fails.
+  OFF-PISTE logo status item, global ⌃⌥⌘V hotkey. The status
   item and the notification use *different* assets: the menu bar draws the `StatusIcon`
   vector asset (the SVG, template-rendered so macOS tints it to the bar), while the branded
   notification keeps the full-colour `AppIcon` — `UNUserNotificationCenter` always takes its
@@ -1577,6 +1614,50 @@ from the URL for "just this slide".
     All three verified in a real browser by Wisse (Chrome, 2026-08-20) — which also
     retired the risk flagged at the time: `findSaveButton` does pick the modal's action bar
     and not a comment's like button, despite the comment list preceding it in DOM order.
+
+42. **Reinstalling the app under a running Safari silently kills cold launch — Safari
+    drops `carabiner://` navigations with no prompt, no error, and no log line.** Found
+    2026-08-21 from a user report ("when the app is not active, it doesn't download on
+    Safari — it worked before"). Nothing in the code was wrong: the appex was registered,
+    shipped current extension code, buttons worked, and grabs completed whenever the app
+    was already running. Only the cold-launch leg was dead, and only in Safari.
+
+    The state that produced it was the morning's reinstall. The app bundle was replaced
+    at 14:03, Safari started at 14:05, and the new appex's pluginkit registration landed
+    at 14:09 — so that Safari session bound its extension state against a mid-swap
+    snapshot. Around it, gotcha #27's rule was being violated three ways at once:
+    LaunchServices held **nine** registrations for the `carabiner://` scheme (six aimed
+    at deleted paths), three stale Debug builds still existed in `/tmp`
+    (`carabiner-test`, `carabiner-test-dd`, `carabiner-dd`), and the `/Applications`
+    Developer ID copy had been deleted out from under its own LS record. In that state a
+    Safari tab navigating to `carabiner://launch` did nothing at all — the launch tab
+    opened and no "open Carabiner?" prompt ever appeared — while `open carabiner://launch`
+    from a shell launched the correct app fine. A scheme that resolves for `open` proves
+    nothing about Safari.
+
+    What fixed it, in order, with the causality measured rather than assumed:
+    - Deleting the stale `/tmp` bundles, `lsregister -u`-ing every dead record, and
+      `lsregister -f`-ing the real app left exactly one claim on the scheme — and Safari
+      **still** silently dropped the navigation. Registry cleanup alone is not the fix.
+    - Quitting and reopening Safari against that clean state fixed it: same click, app
+      launched, file landed. (Untested: whether a restart against the dirty registry
+      would also have worked — the cleanup came first and there was no way to un-clean.)
+
+    The rule this adds to gotcha #27's family: **the appex swap happens under a running
+    Safari session, so after any rebuild-and-reinstall of `Carabiner.app`, quit and
+    reopen Safari before trusting anything Safari-side** — especially cold launch, which
+    is the one leg with no error surface anywhere: not in Safari, not in the worker (the
+    tab is created successfully), not in the unified log (WebKit keeps the scheme
+    decision private; a targeted `log stream` during a real click captured nothing).
+    Chrome is unaffected — its external-protocol dialog goes through Chrome's own
+    machinery, not a Safari session's cached binding.
+
+    Diagnostic shape worth reusing: reproduce the browser's half without the extension
+    (`osascript` → Safari `make new document` at `carabiner://launch`) and compare it
+    against `open` of the same URL. The AppleScript navigation matched the real button's
+    failure exactly — "new tab, no prompt", confirmed by the user against the real button
+    — which pinned the break inside Safari's scheme handling and cleared the extension,
+    the appex, LaunchServices resolution, and the app itself in one move.
 
 ## Dependencies
 
