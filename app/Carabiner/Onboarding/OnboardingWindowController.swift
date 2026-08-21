@@ -40,7 +40,9 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
         UserDefaults.standard.set(true, forKey: Self.shownDefaultsKey)
         model.refreshAll()
         NSApp.activate(ignoringOtherApps: true)
-        window?.center()
+        // A Dock-tile click routes here for an already-open window too (bring to front);
+        // re-centering would yank a window the user has positioned.
+        if window?.isVisible != true { window?.center() }
         window?.makeKeyAndOrderFront(nil)
     }
 

@@ -55,6 +55,29 @@ The Dock tile appears during *every* run — including when the browser
 extension cold-launches the app and when Launch at login starts it. That is
 inherent to "an app like all the others" and was accepted explicitly.
 
+## App icon (added same day, after the first Dock appearance)
+
+The Dock tile exposed an icon problem the menu bar never could: the shipped
+AppIcon was a pre-rounded Big-Sur-style tile (black rounded rect baked into
+PNGs), and macOS 26 (Tahoe) puts legacy pre-rounded icons on a system glass
+backplate, slightly scaled down — which rendered as a gray outline ring
+around the tile. The ring was Tahoe's treatment, not the artwork.
+
+Fix: a Tahoe-native Icon Composer document, `app/Carabiner/AppIcon.icon`
+(hand-authored JSON — validated standalone with `xcrun actool` before wiring
+it in). Solid black fill; one flat layer (`glass`, `specular`, `shadow`,
+`translucency` all off) holding the full brand composition — mark plus rope,
+corner to corner — extracted from `Carabiner_logo.jpg` as white-on-alpha via
+CIMaskToAlpha. Layer `scale` is 0.5: the unit is native image pixels per
+canvas point, and the source is 2048px on Tahoe's 1024pt canvas. The system
+draws its own squircle and glass edge, so there is nothing for the backplate
+to outline.
+
+`AppIcon.appiconset` is deleted: actool generates the legacy `AppIcon.icns`
+fallback for macOS ≤ 15 from the same `.icon` file.
+`ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon` is now set explicitly in
+`project.yml` — xcodegen only infers it while an `.appiconset` exists.
+
 ## Testing
 
 The reopen handler and menu are thin AppKit wiring: verified by hand (Dock

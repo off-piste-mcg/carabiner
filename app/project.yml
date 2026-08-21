@@ -20,6 +20,16 @@ targets:
     platform: macOS
     sources:
       - Carabiner
+      # The Tahoe-native app icon (Icon Composer document, hand-authored JSON): black
+      # fill + the full white mark as one flat layer. macOS 26 draws its own squircle
+      # and glass edge from it — shipping pre-rounded PNGs instead is what put the old
+      # icon on Tahoe's gray backplate ring. actool also generates the legacy .icns
+      # fallback for macOS ≤ 15 from this same file, which is why there is no
+      # AppIcon.appiconset any more. `type: file` keeps xcodegen from exploding the
+      # bundle into a group of loose JSON/PNG resources.
+      - path: Carabiner/AppIcon.icon
+        buildPhase: resources
+        type: file
       - path: ../carabiner
         buildPhase: resources
       - path: ../assets
@@ -136,7 +146,9 @@ targets:
     info:
       path: Carabiner/Info.plist
       properties:
-        LSUIElement: true
+        # No LSUIElement: Carabiner is a regular app since 2026-08-21 — Dock tile while
+        # running, pinnable, Cmd+Tab. The status item stays; the Dock is in addition.
+        # See docs/superpowers/specs/2026-08-21-dock-app-design.md.
         CFBundleName: Carabiner
         CFBundleDisplayName: Carabiner
         NSHumanReadableCopyright: "OFF-PISTE"
@@ -157,6 +169,9 @@ targets:
         MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "3"
         GENERATE_INFOPLIST_FILE: NO
+        # Points at AppIcon.icon (the appiconset is gone). Explicit because xcodegen only
+        # infers this default while an .appiconset exists in the catalog.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Signing is NOT deferrable to the distribution phase. macOS refuses to register
         # an ad-hoc/linker-signed bundle for user notifications: requestAuthorization
         # fails with UNErrorDomain 1 (notificationsNotAllowed), no prompt is ever shown,
