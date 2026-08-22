@@ -78,6 +78,7 @@ struct MainView: View {
             }
         }
         .padding(.horizontal, 56)
+        .frame(maxWidth: .infinity)
     }
 
     private var linkBar: some View {
@@ -180,7 +181,6 @@ struct MainView: View {
             }
             .padding(16)
         }
-        .allowsHitTesting(true)
     }
 
     /// First provider that yields a URL or a URL-shaped string wins. Completion is called

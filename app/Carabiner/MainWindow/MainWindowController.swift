@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// The main window: the brand canvas plus the in-window settings panel. Owns everything
@@ -13,6 +14,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let clearIntercept: () -> Void
     private var hotkeyModel = HotkeyTestModel()
     private var hotkeyTimer: Timer?
+    private var settingsShownCancellable: AnyCancellable?
 
     /// Same string as the retired onboarding window's shownDefaultsKey — existing
     /// installs must not re-run first-launch.
@@ -47,6 +49,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             rootView: MainView(model: model, settings: settingsModel))
         window.setContentSize(NSSize(width: 720, height: 460))
         settingsModel.onBeginHotkeyTest = { [weak self] in self?.beginHotkeyTest() }
+        // Closing the panel (Esc/✕/scrim) sets settingsShown = false directly in
+        // MainView, bypassing windowWillClose — without this, a hotkey test left
+        // running keeps the global intercept armed for up to 10s after the panel is
+        // gone. Cancelling here is safe even when no test is running: cancelHotkeyTest
+        // below is idempotent (HotkeyTestModel.cancel() only acts in .listening).
+        settingsShownCancellable = model.$settingsShown.sink { [weak self] shown in
+            if !shown { self?.cancelHotkeyTest() }
+        }
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
@@ -88,14 +98,25 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// Tears down an in-flight hotkey test: invalidate the timeout timer, release the
+    /// global hotkey intercept, and reset the row's own state. Idempotent — safe to call
+    /// whether or not a test is actually running (HotkeyTestModel.cancel() only acts in
+    /// .listening; invalidate()/clearIntercept() are no-ops otherwise).
+    private func cancelHotkeyTest() {
+        hotkeyTimer?.invalidate()
+        clearIntercept()
+        hotkeyModel.cancel()
+        settingsModel.hotkey = hotkeyModel.presentation
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) { settingsModel.refreshAll() }
 
     func windowWillClose(_ notification: Notification) {
-        hotkeyTimer?.invalidate()
-        clearIntercept()
-        hotkeyModel.cancel()
-        settingsModel.hotkey = hotkeyModel.presentation
+        cancelHotkeyTest()
+        // A Dock click after closing with the panel open must reopen onto the plain
+        // canvas, never the panel — this is what makes that true.
+        model.settingsShown = false
     }
 }

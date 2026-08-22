@@ -19,7 +19,14 @@ targets:
     type: application
     platform: macOS
     sources:
-      - Carabiner
+      # BrandAssets is excluded here because it is added explicitly below as a
+      # `type: folder` reference (Resources/BrandAssets/). Without the exclude, this
+      # plain entry ALSO sweeps it in as loose files at the Resources root
+      # (Resources/bg.jpg, Resources/ABCDiatypeMono-Regular.otf) — duplicated, and in
+      # the loose-file case ATSApplicationFontsPath: BrandAssets (below) can't find it.
+      - path: Carabiner
+        excludes:
+          - "BrandAssets"
       # The Tahoe-native app icon (Icon Composer document, hand-authored JSON): black
       # fill + the full white mark as one flat layer. macOS 26 draws its own squircle
       # and glass edge from it — shipping pre-rounded PNGs instead is what put the old
