@@ -13,6 +13,9 @@ final class MainViewModel: ObservableObject {
     /// Inline message under the grab box — invalid URL, or busy elsewhere. Cleared on the
     /// next successful submit.
     @Published private(set) var feedback: String?
+    /// Whether the settings panel is shown over the canvas. Set by the yellow pill,
+    /// by MenuBarController.showSettings(), and cleared by ✕ / Esc / the scrim.
+    @Published var settingsShown = false
 
     let history: GrabHistoryStore
 

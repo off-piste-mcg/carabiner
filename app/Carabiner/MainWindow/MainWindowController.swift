@@ -8,14 +8,24 @@ final class MainWindowController: NSWindowController {
 
     init(model: MainViewModel) {
         self.model = model
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 480),
-                              styleMask: [.titled, .closable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable,
+                                          .fullSizeContentView],
                               backing: .buffered, defer: false)
-        window.title = "Carabiner"
+        // The brand canvas is the window: transparent titlebar, no title text, content
+        // bleeding under the traffic lights (which stay — native close/minimize).
+        window.title = "Carabiner"              // window menu / accessibility name only
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        // The artwork is light and has no dark variant; pin the appearance so native
+        // sub-controls (context menus, text caret) never go dark-on-pale.
+        window.appearance = NSAppearance(named: .aqua)
+        window.isMovableByWindowBackground = true
+        window.minSize = NSSize(width: 640, height: 420)
         window.isReleasedWhenClosed = false
         super.init(window: window)
         window.contentViewController = NSHostingController(rootView: MainView(model: model))
-        window.setContentSize(NSSize(width: 460, height: 480))
+        window.setContentSize(NSSize(width: 720, height: 460))
     }
 
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }

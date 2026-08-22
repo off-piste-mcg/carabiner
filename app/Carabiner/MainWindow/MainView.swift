@@ -1,8 +1,9 @@
 import SwiftUI
 import QuickLookThumbnailing
 
-/// The main window's body: grab box on top, recent grabs below. Deliberately dumb, like
-/// OnboardingView — it renders model state and forwards actions.
+/// The brand canvas: gradient artwork edge to edge, the link bar center, RECENT below,
+/// corner furniture around. Renders model state and forwards actions — every decision
+/// stays in MainViewModel. Settings overlay arrives in SettingsPanel (own file).
 struct MainView: View {
     @ObservedObject var model: MainViewModel
     @ObservedObject var history: GrabHistoryStore
@@ -13,35 +14,14 @@ struct MainView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            grabBox
-                .padding(16)
-            Divider()
-            historyList
+        ZStack {
+            background
+            content
+            furniture
         }
-        .frame(minWidth: 460, minHeight: 380)
-    }
-
-    private var grabBox: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                TextField("Paste an Instagram, YouTube or Pinterest link", text: $model.urlField)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { model.submit() }
-                Button("Grab") { model.submit() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(model.grabbing)
-            }
-            if let stage = model.stage {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.small)
-                    Text(stage).font(.callout).foregroundStyle(.secondary)
-                }
-            } else if let feedback = model.feedback {
-                Text(feedback).font(.callout).foregroundStyle(.secondary)
-            }
-        }
-        // A URL dragged anywhere onto the box submits it — same path as typing it.
+        .frame(minWidth: 640, minHeight: 420)
+        .ignoresSafeArea()   // under the transparent titlebar
+        // A URL dragged anywhere onto the canvas submits — same path as typing it.
         .onDrop(of: [.url, .plainText], isTargeted: nil) { providers in
             loadDroppedURL(from: providers) { dropped in
                 model.urlField = dropped
@@ -51,21 +31,143 @@ struct MainView: View {
         }
     }
 
+    // MARK: - canvas
+
     @ViewBuilder
-    private var historyList: some View {
-        if history.entries.isEmpty {
-            VStack(spacing: 6) {
-                Text("No grabs yet").font(.title3).foregroundStyle(.secondary)
-                Text("Files you grab land in ~/Downloads and show up here.")
-                    .font(.callout).foregroundStyle(.tertiary)
+    private var background: some View {
+        GeometryReader { geo in
+            if let image = Brand.backgroundImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: geo.size.width, height: geo.size.height)
+                    .clipped()
+            } else {
+                // Checkout without the asset: approximate, never a white void.
+                LinearGradient(colors: [Color(red: 0.64, green: 0.69, blue: 0.76),
+                                        Color(red: 0.86, green: 0.87, blue: 0.88)],
+                               startPoint: .top, endPoint: .bottom)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            List(history.entries) { entry in
-                HistoryRow(entry: entry)
-            }
-            .listStyle(.inset)
         }
+        .ignoresSafeArea()
+    }
+
+    private var content: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 60)
+            linkBar
+            statusLine
+                .padding(.top, 12)
+            Spacer(minLength: 24)
+            if !history.entries.isEmpty {
+                recentSection
+                    .padding(.bottom, 44)   // clears the footer furniture
+            }
+        }
+        .padding(.horizontal, 56)
+    }
+
+    private var linkBar: some View {
+        HStack(spacing: 10) {
+            TextField("", text: $model.urlField,
+                      prompt: Text("PASTE YOUR LINK").font(Brand.mono(12)))
+                .textFieldStyle(.plain)
+                .font(Brand.mono(12))
+                .padding(.horizontal, 18)
+                .frame(height: 34)
+                .background(Capsule().fill(.white.opacity(0.55)))
+                .onSubmit { model.submit() }
+            Button { model.submit() } label: {
+                Text("GRAB")
+                    .font(Brand.mono(12)).kerning(1)
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 24)
+                    .frame(height: 34)
+                    .background(Capsule().fill(Brand.yellow))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.defaultAction)
+            .disabled(model.grabbing)
+        }
+        .frame(maxWidth: 560)
+    }
+
+    @ViewBuilder
+    private var statusLine: some View {
+        if let stage = model.stage {
+            HStack(spacing: 8) {
+                PulsingDot()
+                Text(stage.uppercased()).font(Brand.mono(10)).kerning(1)
+                    .foregroundStyle(.black.opacity(0.6))
+            }
+        } else if let feedback = model.feedback {
+            Text(feedback.uppercased()).font(Brand.mono(10)).kerning(1)
+                .foregroundStyle(.black.opacity(0.6))
+                .multilineTextAlignment(.center)
+        }
+    }
+
+    private var recentSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("RECENT").font(Brand.mono(10)).kerning(2)
+                .foregroundStyle(.black.opacity(0.45))
+            ScrollView(showsIndicators: false) {
+                LazyVStack(alignment: .leading, spacing: 6) {
+                    ForEach(history.entries) { entry in
+                        HistoryRow(entry: entry)
+                    }
+                }
+            }
+            .frame(maxHeight: 170)
+        }
+        .frame(maxWidth: 560)
+    }
+
+    // MARK: - corner furniture
+
+    private var furniture: some View {
+        ZStack {
+            // Top-right: the settings pill.
+            VStack { HStack { Spacer()
+                Button { model.settingsShown = true } label: {
+                    Capsule().fill(Brand.yellow).frame(width: 40, height: 12)
+                }
+                .buttonStyle(.plain)
+                .help("Settings")
+            }; Spacer() }
+            .padding(14)
+
+            // Right edge, rotated: the version.
+            HStack { Spacer()
+                Text("V. \(Brand.shortVersion)")
+                    .font(Brand.mono(9)).kerning(2)
+                    .foregroundStyle(.black.opacity(0.4))
+                    .fixedSize()
+                    .rotationEffect(.degrees(90))
+                    .frame(width: 14)
+            }
+            .padding(.trailing, 10)
+
+            // Bottom-left: the hotkey hint. Bottom-right: wordmark + clock.
+            VStack { Spacer()
+                HStack(alignment: .center) {
+                    Text("⌃⌥⌘V").font(Brand.mono(10)).kerning(1)
+                        .foregroundStyle(.black.opacity(0.4))
+                    Spacer()
+                    HStack(spacing: 8) {
+                        Image("Wordmark")
+                            .resizable().scaledToFit().frame(height: 11)
+                        TimelineView(.everyMinute) { context in
+                            Text(Brand.clockText(context.date))
+                                .font(Brand.mono(10)).kerning(1)
+                                .foregroundStyle(.black.opacity(0.55))
+                        }
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .allowsHitTesting(true)
     }
 
     /// First provider that yields a URL or a URL-shaped string wins. Completion is called
@@ -86,26 +188,43 @@ struct MainView: View {
     }
 }
 
-/// One grab: thumbnail, name, @user, when. Rows whose file no longer exists are dimmed
-/// with the actions disabled — the history is a record, not a promise the file is there.
+/// The yellow activity dot beside the stage text — a quiet pulse, not a spinner.
+private struct PulsingDot: View {
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(Brand.yellow)
+            .frame(width: 6, height: 6)
+            .opacity(dim ? 0.3 : 1)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
+    }
+}
+
+/// One grab, brand-styled: 24px thumbnail, mono caps name, @user · relative time.
+/// Behavior identical to the pre-brand row: double-click opens, context menu Reveal/Open,
+/// rows whose file is gone are dimmed with actions disabled.
 private struct HistoryRow: View {
     let entry: GrabHistoryEntry
 
     var body: some View {
         HStack(spacing: 10) {
             ThumbnailView(path: firstExistingPath)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).lineLimit(1).truncationMode(.middle)
-                HStack(spacing: 6) {
-                    if let user = entry.user { Text(user) }
-                    Text(entry.date, format: .relative(presentation: .named))
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(title.uppercased())
+                .font(Brand.mono(11))
+                .foregroundStyle(.black.opacity(0.75))
+                .lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 12)
+            HStack(spacing: 6) {
+                if let user = entry.user { Text(user.uppercased()) }
+                Text(entry.date, format: .relative(presentation: .named))
             }
-            Spacer()
+            .font(Brand.mono(9))
+            .foregroundStyle(.black.opacity(0.4))
+            .lineLimit(1)
         }
-        .opacity(anyFileExists ? 1 : 0.4)
+        .opacity(anyFileExists ? 1 : 0.35)
         .contentShape(Rectangle())
         .onTapGesture(count: 2) { open() }
         .contextMenu {
@@ -146,7 +265,7 @@ private struct ThumbnailView: View {
     let path: String?
     @State private var thumbnail: NSImage?
 
-    private static let side: CGFloat = 40
+    private static let side: CGFloat = 24
 
     var body: some View {
         Group {
@@ -159,7 +278,7 @@ private struct ThumbnailView: View {
             }
         }
         .frame(width: Self.side, height: Self.side)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .clipShape(RoundedRectangle(cornerRadius: 4))
         .task(id: path) {
             thumbnail = nil
             guard let path else { return }
