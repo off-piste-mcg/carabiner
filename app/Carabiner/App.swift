@@ -70,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showSettings(_ sender: Any?) {
-        menuBar?.showOnboarding()
+        menuBar?.showSettings()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -86,8 +86,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // No unconditional notification request any more: on a fresh install the setup
         // window is the only thing that triggers permission prompts, so every prompt
         // appears next to its explanation instead of naked at first launch.
-        if !UserDefaults.standard.bool(forKey: OnboardingWindowController.shownDefaultsKey) {
-            controller.showOnboarding()
+        if !UserDefaults.standard.bool(forKey: MainWindowController.settingsShownDefaultsKey) {
+            controller.showSettings()
         }
     }
 

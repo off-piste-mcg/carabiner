@@ -18,7 +18,6 @@ final class MenuBarController: NSObject {
     /// fire is a test, not a grab — consumed in hotkeyFired(), never by the menu item, so
     /// clicking "Grab current tab" can't fake a ✓.
     var hotkeyTestHandler: (() -> Void)?
-    private var onboarding: OnboardingWindowController?
     /// Every successful app-driven grab lands here (recorded in the shared grab path's
     /// completion), and the main window renders it.
     private let history = GrabHistoryStore()
@@ -40,7 +39,7 @@ final class MenuBarController: NSObject {
         let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab as () -> Void), keyEquivalent: "")
         grabItem.target = self
         menu.addItem(grabItem)
-        let setupItem = NSMenuItem(title: "Setup & Permissions…", action: #selector(showOnboarding), keyEquivalent: "")
+        let setupItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: "")
         setupItem.target = self
         menu.addItem(setupItem)
         menu.addItem(.separator())
@@ -67,9 +66,20 @@ final class MenuBarController: NSObject {
                                                    serverState: { [weak self] in self?.grabServer?.state ?? .stopped },
                                                    loginItem: LiveLoginItemController()))
             }
-            mainWindow = MainWindowController(model: model, settingsModel: settingsModel)
+            mainWindow = MainWindowController(
+                model: model,
+                settingsModel: settingsModel,
+                hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
+                clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
         }
         mainWindow?.show()
+    }
+
+    /// ⌘,, the status-menu item and first launch: the main window with the settings
+    /// panel already open. Same lazy construction as showMainWindow().
+    @objc func showSettings() {
+        showMainWindow()
+        mainWindow?.showSettings()
     }
 
     /// A grab the main window submitted. The model already validated the URL and set its
@@ -93,32 +103,6 @@ final class MenuBarController: NSObject {
         }
         notifyGrabStarted()
         grab(url: url, browser: Self.browser)
-    }
-
-    @objc func showOnboarding() {
-        if onboarding == nil {
-            onboarding = OnboardingWindowController(
-                // `grabServer` is read fresh on every status check (see LivePermissionChecker's
-                // `lastSeen` doc comment) rather than captured once here — a closure, not the
-                // dictionary itself, is what keeps the browserButton row honest as new
-                // requests land after the window is already open.
-                checker: LivePermissionChecker(browser: Self.browser,
-                                               lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] },
-                                               // Finding 2, final review: a closure, not a
-                                               // captured value, for the same reason
-                                               // `lastSeen` above is one — a port failure
-                                               // that happens AFTER this window opens must
-                                               // still read live, not whatever `grabServer`
-                                               // reported the moment the checker was built.
-                                               serverState: { [weak self] in self?.grabServer?.state ?? .stopped },
-                                               // Explicit rather than relying on the default,
-                                               // so the one real construction site names every
-                                               // seam it depends on.
-                                               loginItem: LiveLoginItemController()),
-                hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
-                clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
-        }
-        onboarding?.show()
     }
 
     /// The hotkey's entry point. Only a real hotkey fire may satisfy the setup window's

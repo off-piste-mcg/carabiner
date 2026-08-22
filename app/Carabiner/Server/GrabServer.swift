@@ -121,7 +121,7 @@ final class GrabServer {
     /// "seen since Carabiner was last relaunched", which drops to grey on every ordinary
     /// quit/update/crash no matter how recently a real request landed. Loaded once at
     /// init, written back after every update via `recordLastSeen`. UserDefaults matches the
-    /// app's one existing use of it (`OnboardingWindowController.shownDefaultsKey`).
+    /// app's one existing use of it (`MainWindowController.settingsShownDefaultsKey`).
     private(set) var lastSeen: [String: Date] = GrabServer.loadLastSeen(from: .standard)
 
     /// Not `private` (review fix round 2, Finding 2): `loadLastSeen(from:)`/
