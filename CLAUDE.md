@@ -97,20 +97,41 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   infers it while an `.appiconset` exists). Layer `scale` in that JSON is native image
   pixels per canvas point: the 2048px source on the 1024pt canvas needs 0.5 for
   full-bleed. See `docs/superpowers/specs/2026-08-21-dock-app-design.md`.
-  The Dock click opens the **main window** (same day, second slice): a paste/drop grab
-  box validated through `GrabGate.checkURL` (the URL half of the extension's gate,
-  extracted so every surface shares one allowlist) plus the **recent-grabs history** —
-  `GrabHistoryStore`, last 50 successful app-driven grabs as JSON in
-  `~/Library/Application Support/Carabiner/`, recorded at the one funnel all grabs pass
-  (`MenuBarController.grab(url:browser:)`'s completion). Shortcut-path grabs bypass the
-  app and can never appear there. Setup & Permissions moved to a standard "Settings…"
-  ⌘, item (status-menu row and first-launch auto-open unchanged). A URL dropped on the
-  Dock tile grabs too: `CFBundleDocumentTypes` accepts `public.url` (document-type
-  acceptance, not a scheme claim) and `dockOpenAction` routes carabiner:// vs allowlisted
-  https vs junk. History rows for the YouTube/Pinterest paths render dimmed with no
-  thumbnail — the script announces `saved to ~/Downloads` there, not a filename; making
-  the engine announce real filenames on those paths is the natural follow-up. See
-  `docs/superpowers/specs/2026-08-21-main-window-design.md`.
+  The Dock click opens the **main window** (same day, second slice — and since
+  2026-08-22 the OFF-PISTE **brand canvas**): `bg.jpg` full-bleed under a transparent
+  titlebar (`fullSizeContentView`, aqua-pinned, 640×420 minimum, 720×460 default size),
+  ABC Diatype Mono registered via `ATSApplicationFontsPath` (`BrandAssets`), and
+  `BrandYellow` (#FAFA78) in the asset catalog — all read through `app/Carabiner/Brand.swift`,
+  the single source (`Brand.yellow` / `Brand.mono` with a system-monospaced fallback /
+  `Brand.backgroundImage` / `Brand.shortVersion` / `Brand.clockText`). **The licensed
+  `.otf` is gitignored** — this is a public repo, so a checkout without it still builds
+  and `Brand.mono` falls back to system monospaced; `bg.jpg` itself IS committed. Corner
+  furniture on the canvas: a settings pill (top-right), a rotated version string (right
+  edge), the hotkey hint (bottom-left), and the wordmark plus a live clock (bottom-right).
+  Over that canvas sits a paste/drop grab box validated through `GrabGate.checkURL` (the
+  URL half of the extension's gate, extracted so every surface shares one allowlist) plus
+  the **recent-grabs history** — `GrabHistoryStore`, last 50 successful app-driven grabs
+  as JSON in `~/Library/Application Support/Carabiner/`, recorded at the one funnel all
+  grabs pass (`MenuBarController.grab(url:browser:)`'s completion), shown only when
+  non-empty. Shortcut-path grabs bypass the app and can never appear there. **Settings is
+  now an in-window slide-in panel**, not a separate window
+  (`app/Carabiner/MainWindow/SettingsPanel.swift`): it reuses `OnboardingViewModel`
+  untouched, and the panel's only own decision is the pure, tested
+  `SettingsPanel.actionTitle`; Esc, the ✕, and the scrim all close it.
+  **`OnboardingWindowController` and `OnboardingView` are deleted** — don't go looking for
+  them — `MainWindowController` now owns the hotkey-test plumbing that used to live there.
+  ⌘,, the status-menu item (retitled "Settings…") and first-launch auto-open all open the
+  main window with the panel already open; the defaults key string is unchanged
+  (`"onboardingShown"`). The Dock click itself is unchanged by this — it still opens the
+  plain canvas, no panel. A URL dropped on the Dock tile grabs too:
+  `CFBundleDocumentTypes` accepts `public.url` (document-type acceptance, not a scheme
+  claim) and `dockOpenAction` routes carabiner:// vs allowlisted https vs junk. History
+  rows for the YouTube/Pinterest paths render dimmed with no thumbnail — the script
+  announces `saved to ~/Downloads` there, not a filename; making the engine announce real
+  filenames on those paths is the natural follow-up. See
+  `docs/superpowers/specs/2026-08-21-main-window-design.md` (grab box + history) and
+  `docs/superpowers/specs/2026-08-22-brand-main-window-design.md` (brand canvas +
+  in-window settings).
   **Found while verifying (2026-08-21), pre-existing and NOT caused by this work: the
   bundled yt-dlp cannot grab YouTube any more.** Same version as Homebrew's (2026.07.04),
   but YouTube now requires the `yt-dlp-ejs` JS-challenge component, which Homebrew's
