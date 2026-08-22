@@ -58,7 +58,16 @@ final class MenuBarController: NSObject {
             let model = MainViewModel(history: history)
             model.isBusyElsewhere = { [weak self] in self?.busy ?? false }
             model.onGrab = { [weak self] url in self?.grabFromWindow(url: url) }
-            mainWindow = MainWindowController(model: model)
+            // OnboardingViewModel is @MainActor; wrap the construction site minimally.
+            // This closure runs on the main queue (Dock click context).
+            let settingsModel = MainActor.assumeIsolated {
+                OnboardingViewModel(
+                    checker: LivePermissionChecker(browser: Self.browser,
+                                                   lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] },
+                                                   serverState: { [weak self] in self?.grabServer?.state ?? .stopped },
+                                                   loginItem: LiveLoginItemController()))
+            }
+            mainWindow = MainWindowController(model: model, settingsModel: settingsModel)
         }
         mainWindow?.show()
     }

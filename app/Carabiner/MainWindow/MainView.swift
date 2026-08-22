@@ -7,18 +7,31 @@ import QuickLookThumbnailing
 struct MainView: View {
     @ObservedObject var model: MainViewModel
     @ObservedObject var history: GrabHistoryStore
+    @ObservedObject var settings: OnboardingViewModel
 
-    init(model: MainViewModel) {
+    init(model: MainViewModel, settings: OnboardingViewModel) {
         self.model = model
         self.history = model.history
+        self.settings = settings
     }
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .trailing) {
             background
             content
             furniture
+            if model.settingsShown {
+                // Scrim: click closes. Above the canvas, below the panel.
+                Color.black.opacity(0.25)
+                    .ignoresSafeArea()
+                    .onTapGesture { model.settingsShown = false }
+                    .transition(.opacity)
+                SettingsPanel(model: settings) { model.settingsShown = false }
+                    .transition(.move(edge: .trailing))
+            }
         }
+        .animation(.easeOut(duration: 0.2), value: model.settingsShown)
+        .onExitCommand { if model.settingsShown { model.settingsShown = false } }
         .frame(minWidth: 640, minHeight: 420)
         .ignoresSafeArea()   // under the transparent titlebar
         // A URL dragged anywhere onto the canvas submits — same path as typing it.
@@ -129,7 +142,7 @@ struct MainView: View {
         ZStack {
             // Top-right: the settings pill.
             VStack { HStack { Spacer()
-                Button { model.settingsShown = true } label: {
+                Button { settings.refreshAll(); model.settingsShown = true } label: {
                     Capsule().fill(Brand.yellow).frame(width: 40, height: 12)
                 }
                 .buttonStyle(.plain)

@@ -5,9 +5,11 @@ import SwiftUI
 /// lives in MainViewModel. Same construction pattern as OnboardingWindowController.
 final class MainWindowController: NSWindowController {
     let model: MainViewModel
+    let settingsModel: OnboardingViewModel
 
-    init(model: MainViewModel) {
+    init(model: MainViewModel, settingsModel: OnboardingViewModel) {
         self.model = model
+        self.settingsModel = settingsModel
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable,
                                           .fullSizeContentView],
@@ -24,7 +26,8 @@ final class MainWindowController: NSWindowController {
         window.minSize = NSSize(width: 640, height: 420)
         window.isReleasedWhenClosed = false
         super.init(window: window)
-        window.contentViewController = NSHostingController(rootView: MainView(model: model))
+        window.contentViewController = NSHostingController(
+            rootView: MainView(model: model, settings: settingsModel))
         window.setContentSize(NSSize(width: 720, height: 460))
     }
 
