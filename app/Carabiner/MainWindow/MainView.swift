@@ -9,6 +9,10 @@ struct MainView: View {
     @ObservedObject var history: GrabHistoryStore
     @ObservedObject var settings: OnboardingViewModel
 
+    /// Pointer over GRAB. Only drives the spring scale — on macOS 26 the lensing and
+    /// specular sweep come from `Glass.interactive()`, which the system animates itself.
+    @State private var hoveringGrab = false
+
     init(model: MainViewModel, settings: OnboardingViewModel) {
         self.model = model
         self.history = model.history
@@ -76,7 +80,7 @@ struct MainView: View {
     }
 
     private var linkBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             TextField("", text: $model.urlField,
                       prompt: Text("PASTE YOUR LINK").font(Brand.mono(12)))
                 .textFieldStyle(.plain)
@@ -97,9 +101,25 @@ struct MainView: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 24)
                     .frame(height: 34)
-                    .background(Capsule().fill(Brand.yellow))
+                    .background {
+                        // Tinted interactive glass on Tahoe: the hover lensing, the
+                        // specular sweep and the press springiness are the system's,
+                        // not ours. 13–15 keeps the flat capsule and the scale below.
+                        if #available(macOS 26.0, *) {
+                            Color.clear.glassEffect(
+                                .regular.tint(Brand.yellow).interactive(), in: Capsule())
+                        } else {
+                            Capsule().fill(Brand.yellow)
+                        }
+                    }
+                    .scaleEffect(hoveringGrab ? 1.04 : 1)
+                    .animation(.spring(response: 0.3, dampingFraction: 0.6), value: hoveringGrab)
             }
             .buttonStyle(.plain)
+            // A disabled button must not react to the pointer, and a grab that starts
+            // under the cursor must drop the hover state rather than stay swollen.
+            .onHover { hoveringGrab = $0 && !model.grabbing }
+            .onChange(of: model.grabbing) { if $0 { hoveringGrab = false } }
             .keyboardShortcut(.defaultAction)
             .disabled(model.grabbing)
         }
@@ -136,24 +156,14 @@ struct MainView: View {
             }
             .padding(.trailing, 10)
 
-            // Bottom-right cluster: the rail now covers the bottom-left corner full
-            // height, so the hotkey hint moved in beside the wordmark + clock rather
-            // than sit hidden behind the frosted rail material.
+            // Bottom-right: the wordmark alone. The hotkey hint and the clock sat
+            // beside it until 2026-08-24 and were dropped — neither earns its place
+            // on the canvas, and the corner reads quieter without them.
             VStack { Spacer()
-                HStack(alignment: .center) {
+                HStack {
                     Spacer()
-                    Text("⌃⌥⌘V").font(Brand.mono(10)).kerning(1)
-                        .foregroundStyle(.black.opacity(0.4))
-                    Spacer().frame(width: 14)
-                    HStack(spacing: 8) {
-                        Image("Wordmark")
-                            .resizable().scaledToFit().frame(height: 11)
-                        TimelineView(.everyMinute) { context in
-                            Text(Brand.clockText(context.date))
-                                .font(Brand.mono(10)).kerning(1)
-                                .foregroundStyle(.black.opacity(0.55))
-                        }
-                    }
+                    Image("Wordmark")
+                        .resizable().scaledToFit().frame(height: 11)
                 }
             }
             .padding(16)
