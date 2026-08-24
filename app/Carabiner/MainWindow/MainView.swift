@@ -83,7 +83,13 @@ struct MainView: View {
                 .font(Brand.mono(12))
                 .padding(.horizontal, 18)
                 .frame(height: 34)
-                .background(Capsule().fill(.white.opacity(0.55)))
+                .background {
+                    if #available(macOS 26.0, *) {
+                        Color.clear.glassEffect(.regular, in: Capsule())
+                    } else {
+                        Capsule().fill(.white.opacity(0.55))
+                    }
+                }
                 .onSubmit { model.submit() }
             Button { model.submit() } label: {
                 Text("GRAB")

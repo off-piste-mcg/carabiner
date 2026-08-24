@@ -34,7 +34,14 @@ struct SideRail: View {
         .padding(.vertical, 16)
         .frame(width: 48)
         .frame(maxHeight: .infinity)
-        .background(RoundedRectangle(cornerRadius: 22).fill(.regularMaterial))
+        .background {
+            // Liquid Glass on Tahoe; the same frost as always on 13–15.
+            if #available(macOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))
+            } else {
+                RoundedRectangle(cornerRadius: 22).fill(.regularMaterial)
+            }
+        }
     }
 
     private func railButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -79,7 +86,13 @@ struct SideRail: View {
         }
         .frame(width: 300)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 22).fill(.regularMaterial))
+        .background {
+            if #available(macOS 26.0, *) {
+                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))
+            } else {
+                RoundedRectangle(cornerRadius: 22).fill(.regularMaterial)
+            }
+        }
     }
 
     @ViewBuilder
