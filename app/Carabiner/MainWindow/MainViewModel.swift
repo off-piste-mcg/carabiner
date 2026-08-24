@@ -13,9 +13,16 @@ final class MainViewModel: ObservableObject {
     /// Inline message under the grab box — invalid URL, or busy elsewhere. Cleared on the
     /// next successful submit.
     @Published private(set) var feedback: String?
-    /// Whether the settings panel is shown over the canvas. Set by the yellow pill,
-    /// by MenuBarController.showSettings(), and cleared by ✕ / Esc / the scrim.
-    @Published var settingsShown = false
+    /// Which side card is expanded from the rail, nil = collapsed. Set by the rail's
+    /// icons, MainWindowController.showSettings(), and the auto-peek; cleared by ✕ /
+    /// Esc / a canvas click / window close.
+    @Published var panel: SidePanel?
+
+    enum SidePanel { case grabs, settings }
+
+    /// Pending auto-collapse of a peeked grabs card. A manual rail open cancels it so
+    /// a deliberate open never snaps shut.
+    private var peekCollapse: DispatchWorkItem?
 
     let history: GrabHistoryStore
 
@@ -28,6 +35,17 @@ final class MainViewModel: ObservableObject {
 
     init(history: GrabHistoryStore) {
         self.history = history
+    }
+
+    /// The rail's grabs icon. Manual opens cancel any pending peek collapse.
+    func openGrabs() {
+        peekCollapse?.cancel(); peekCollapse = nil
+        panel = .grabs
+    }
+
+    func collapsePanel() {
+        peekCollapse?.cancel(); peekCollapse = nil
+        panel = nil
     }
 
     /// The Grab button / return key. Validates through the same allowlist as the
@@ -65,6 +83,19 @@ final class MainViewModel: ObservableObject {
         // answer is where the question was asked. A cancel is a deliberate act — silence,
         // same as the banners.
         if !result.ok && !result.cancelled { feedback = result.message }
+
+        // Auto-peek: show the new row land, then tuck away. Never yanks a panel the
+        // user opened (guard nil), and never auto-collapses a manual open (the work
+        // item is cancelled by openGrabs/collapsePanel).
+        if result.ok && panel == nil {
+            panel = .grabs
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.panel == .grabs else { return }
+                self.panel = nil
+            }
+            peekCollapse = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
+        }
     }
 
     /// Same stage phrasing as BannerPlanner, minus its post/remove state machine — the

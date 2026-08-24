@@ -1,66 +1,37 @@
 import SwiftUI
 
-/// The in-window settings: the Setup & Permissions rows re-housed in brand style.
-/// Renders OnboardingViewModel and forwards intents — every permission decision stays
-/// in that model (untouched; gotchas #28/#37/#40 live there). This view's only own
-/// decision is actionTitle(row:isOn:notApplicable:), which is pure and tested.
-struct SettingsPanel: View {
+/// The settings card's scrollable content: the Setup & Permissions rows re-housed in
+/// brand style. Renders OnboardingViewModel and forwards intents — every permission
+/// decision stays in that model (untouched; gotchas #28/#37/#40 live there). The card
+/// chrome (header/✕/width/background) lives in SideRail now; this view owns only the
+/// rows. Its one own decision is actionTitle(row:isOn:notApplicable:), which is pure
+/// and tested (kept as SettingsPanel.actionTitle — SettingsPanelTests points at it).
+struct SettingsContent: View {
     @ObservedObject var model: OnboardingViewModel
-    let onClose: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("SETTINGS").font(Brand.mono(12)).kerning(2)
-                Spacer()
-                Button(action: onClose) {
-                    Image(systemName: "xmark").font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.5))
-                }
-                .buttonStyle(.plain)
-                .help("Close")
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(PermissionRow.allCases, id: \.self) { row in
+                PanelRow(
+                    title: row.title.uppercased(),
+                    detail: model.presentation(for: row).detail ?? row.why,
+                    state: model.isNotApplicable(row) ? .notApplicable
+                         : model.isOn(row) ? .on : .off,
+                    actionTitle: SettingsPanel.actionTitle(row: row,
+                                                  isOn: model.isOn(row),
+                                                  notApplicable: model.isNotApplicable(row)),
+                    action: { desiredOn in model.setEnabled(desiredOn, for: row) })
             }
-            .padding(.top, 40)   // clears the transparent titlebar region
-            .padding(.horizontal, 20)
-            .padding(.bottom, 16)
-
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    ForEach(PermissionRow.allCases, id: \.self) { row in
-                        PanelRow(
-                            title: row.title.uppercased(),
-                            detail: model.presentation(for: row).detail ?? row.why,
-                            state: model.isNotApplicable(row) ? .notApplicable
-                                 : model.isOn(row) ? .on : .off,
-                            actionTitle: Self.actionTitle(row: row,
-                                                          isOn: model.isOn(row),
-                                                          notApplicable: model.isNotApplicable(row)),
-                            action: { desiredOn in model.setEnabled(desiredOn, for: row) })
-                    }
-                    hotkeyRow
-                    Text("Your first grab may ask for access to Chrome's \"Safe Storage\" — "
-                         + "click Always Allow. That's macOS guarding Chrome's cookies, which "
-                         + "Carabiner reads to act as you.")
-                        .font(Brand.mono(9))
-                        .foregroundStyle(.black.opacity(0.4))
-                        .padding(.top, 4)
-                }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-            }
+            hotkeyRow
+            Text("Your first grab may ask for access to Chrome's \"Safe Storage\" — "
+                 + "click Always Allow. That's macOS guarding Chrome's cookies, which "
+                 + "Carabiner reads to act as you.")
+                .font(Brand.mono(9))
+                .foregroundStyle(.black.opacity(0.4))
+                .padding(.top, 4)
         }
-        .frame(width: 300)
-        .frame(maxHeight: .infinity)
-        .background(.regularMaterial)
-    }
-
-    /// Which action a row offers. ALLOW when ungranted; nothing when granted (macOS
-    /// offers no revoke) — except Launch at login, the one row that can honestly turn
-    /// itself off; nothing when not applicable (nothing to flip on this machine).
-    static func actionTitle(row: PermissionRow, isOn: Bool, notApplicable: Bool) -> String? {
-        if notApplicable { return nil }
-        if !isOn { return "ALLOW" }
-        return row == .launchAtLogin ? "DISABLE" : nil
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
     }
 
     @ViewBuilder
@@ -83,6 +54,19 @@ struct SettingsPanel: View {
                     .background(Capsule().fill(Brand.yellow))
             }
         }
+    }
+}
+
+/// Namespace for the card's one own decision, kept at this name (not folded into
+/// SettingsContent) because SettingsPanelTests points at `SettingsPanel.actionTitle`.
+enum SettingsPanel {
+    /// Which action a row offers. ALLOW when ungranted; nothing when granted (macOS
+    /// offers no revoke) — except Launch at login, the one row that can honestly turn
+    /// itself off; nothing when not applicable (nothing to flip on this machine).
+    static func actionTitle(row: PermissionRow, isOn: Bool, notApplicable: Bool) -> String? {
+        if notApplicable { return nil }
+        if !isOn { return "ALLOW" }
+        return row == .launchAtLogin ? "DISABLE" : nil
     }
 }
 

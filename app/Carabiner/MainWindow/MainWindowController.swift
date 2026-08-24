@@ -14,7 +14,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let clearIntercept: () -> Void
     private var hotkeyModel = HotkeyTestModel()
     private var hotkeyTimer: Timer?
-    private var settingsShownCancellable: AnyCancellable?
+    private var panelCancellable: AnyCancellable?
 
     /// Same string as the retired onboarding window's shownDefaultsKey — existing
     /// installs must not re-run first-launch.
@@ -49,13 +49,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             rootView: MainView(model: model, settings: settingsModel))
         window.setContentSize(NSSize(width: 720, height: 460))
         settingsModel.onBeginHotkeyTest = { [weak self] in self?.beginHotkeyTest() }
-        // Closing the panel (Esc/✕/scrim) sets settingsShown = false directly in
-        // MainView, bypassing windowWillClose — without this, a hotkey test left
-        // running keeps the global intercept armed for up to 10s after the panel is
-        // gone. Cancelling here is safe even when no test is running: cancelHotkeyTest
-        // below is idempotent (HotkeyTestModel.cancel() only acts in .listening).
-        settingsShownCancellable = model.$settingsShown.sink { [weak self] shown in
-            if !shown { self?.cancelHotkeyTest() }
+        // Closing the panel (Esc/✕/canvas click) sets panel = nil directly in MainView,
+        // bypassing windowWillClose — without this, a hotkey test left running keeps
+        // the global intercept armed for up to 10s after the panel is gone. Cancelling
+        // here is safe even when no test is running: cancelHotkeyTest below is
+        // idempotent (HotkeyTestModel.cancel() only acts in .listening).
+        panelCancellable = model.$panel.sink { [weak self] panel in
+            if panel != .settings { self?.cancelHotkeyTest() }
         }
     }
 
@@ -74,7 +74,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func showSettings() {
         UserDefaults.standard.set(true, forKey: Self.settingsShownDefaultsKey)
         settingsModel.refreshAll()
-        model.settingsShown = true
+        model.panel = .settings
         show()
     }
 
@@ -117,6 +117,6 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         cancelHotkeyTest()
         // A Dock click after closing with the panel open must reopen onto the plain
         // canvas, never the panel — this is what makes that true.
-        model.settingsShown = false
+        model.collapsePanel()
     }
 }
