@@ -7,12 +7,36 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 2.0.0
+# Project-wide, so the app and its embedded appex always ship the same version without
+# bumping it in two places — Xcode warns (and App Store validation would reject) an
+# appex whose CFBundleVersion doesn't match its parent app's.
+settings:
+  base:
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "4"
 targets:
   Carabiner:
     type: application
     platform: macOS
     sources:
-      - Carabiner
+      # BrandAssets is excluded here because it is added explicitly below as a
+      # `type: folder` reference (Resources/BrandAssets/). Without the exclude, this
+      # plain entry ALSO sweeps it in as loose files at the Resources root
+      # (Resources/bg.jpg, Resources/ABCDiatypeMono-Regular.otf) — duplicated, and in
+      # the loose-file case ATSApplicationFontsPath: BrandAssets (below) can't find it.
+      - path: Carabiner
+        excludes:
+          - "BrandAssets"
+      # The Tahoe-native app icon (Icon Composer document, hand-authored JSON): black
+      # fill + the full white mark as one flat layer. macOS 26 draws its own squircle
+      # and glass edge from it — shipping pre-rounded PNGs instead is what put the old
+      # icon on Tahoe's gray backplate ring. actool also generates the legacy .icns
+      # fallback for macOS ≤ 15 from this same file, which is why there is no
+      # AppIcon.appiconset any more. `type: file` keeps xcodegen from exploding the
+      # bundle into a group of loose JSON/PNG resources.
+      - path: Carabiner/AppIcon.icon
+        buildPhase: resources
+        type: file
       - path: ../carabiner
         buildPhase: resources
       - path: ../assets
@@ -27,8 +51,17 @@ targets:
       - path: .deps/bin
         buildPhase: resources
         type: folder
+      # Brand canvas + (locally) the licensed font. `type: folder` copies the
+      # directory itself, so these land at Resources/BrandAssets/ — same
+      # mechanism as .deps/bin above. The .otf is gitignored (licensed, public
+      # repo): a checkout without it still builds, and Brand.mono() falls back.
+      - path: Carabiner/BrandAssets
+        buildPhase: resources
+        type: folder
     dependencies:
       - package: KeyboardShortcuts
+      - target: CarabinerSafariExtension
+        embed: true
     # Order matters here, and it is not the obvious one. Both scripts run before Xcode's
     # own CodeSign step, but the xattr strip must be LAST — see its comment.
     postBuildScripts:
@@ -127,20 +160,43 @@ targets:
     info:
       path: Carabiner/Info.plist
       properties:
-        LSUIElement: true
+        # No LSUIElement: Carabiner is a regular app since 2026-08-21 — Dock tile while
+        # running, pinnable, Cmd+Tab. The status item stays; the Dock is in addition.
+        # See docs/superpowers/specs/2026-08-21-dock-app-design.md.
         CFBundleName: Carabiner
         CFBundleDisplayName: Carabiner
         NSHumanReadableCopyright: "OFF-PISTE"
         LSMinimumSystemVersion: "$(MACOSX_DEPLOYMENT_TARGET)"
         NSAppleEventsUsageDescription: "Carabiner reads your active browser tab's URL so it can grab the media you're viewing."
+        # Registers every font in Resources/BrandAssets at launch — this is
+        # what makes Font.custom("ABCDiatypeMono-Regular") resolve.
+        ATSApplicationFontsPath: BrandAssets
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        # The browser extension's background worker opens carabiner://launch purely to
+        # start the app when it finds it isn't already listening on the HTTP port — the
+        # real grab request goes over HTTP once the app is up. See App.swift's
+        # application(_:open:) and extension/src/worker.js's launchApp().
+        CFBundleURLTypes:
+          - CFBundleURLName: com.offpiste.carabiner
+            CFBundleURLSchemes: [carabiner]
+        # Accepting public.url is what makes a link dragged onto the Dock tile arrive in
+        # application(_:open:) — document-type acceptance only, NOT a scheme-handler
+        # claim, so Carabiner never becomes a default-browser candidate. The allowlist
+        # (GrabGate.checkURL, via dockOpenAction) decides what actually starts a grab.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Web link
+            CFBundleTypeRole: Viewer
+            LSItemContentTypes: [public.url]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner
         MARKETING_VERSION: "0.1.2"
         CURRENT_PROJECT_VERSION: "3"
         GENERATE_INFOPLIST_FILE: NO
+        # Points at AppIcon.icon (the appiconset is gone). Explicit because xcodegen only
+        # infers this default while an .appiconset exists in the catalog.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Signing is NOT deferrable to the distribution phase. macOS refuses to register
         # an ad-hoc/linker-signed bundle for user notifications: requestAuthorization
         # fails with UNErrorDomain 1 (notificationsNotAllowed), no prompt is ever shown,
@@ -193,6 +249,91 @@ targets:
           # exportArchive, which strips it during export; this setting reaches the same
           # place without the ExportOptions.plist machinery. Our real entitlements still
           # apply — they come from CODE_SIGN_ENTITLEMENTS, which this does not touch.
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+  CarabinerSafariExtension:
+    type: app-extension
+    platform: macOS
+    sources:
+      - CarabinerSafariExtension
+      # The extension source, populated by extension/build.sh, which allowlist-copies
+      # only manifest.json, src/ and icons/ into dist/chrome — node_modules/ and test/
+      # are never touched, so there is no exclude pattern to keep in sync as the
+      # extension grows. Referenced as three entries rather than one folder reference
+      # wrapping dist/chrome itself: a folder reference copies under its OWN name (the
+      # same reasoning that puts .deps/bin's contents at Resources/bin/ above), which
+      # here would bury manifest.json at Resources/chrome/manifest.json instead of at
+      # the resource root Safari requires it at. src/ and icons/ still want to be real
+      # folder references, both because manifest.json's own relative paths ("src/...",
+      # "icons/...") expect them as literal subdirectories and to keep this from turning
+      # into a per-file list that silently goes stale as the extension grows.
+      - path: ../extension/dist/chrome/manifest.json
+        buildPhase: resources
+      - path: ../extension/dist/chrome/src
+        buildPhase: resources
+        type: folder
+      - path: ../extension/dist/chrome/icons
+        buildPhase: resources
+        type: folder
+    # Closes the "edited extension/src/*.js, rebuilt, shipped the old JS" trap — the same
+    # shape as the Contents/Resources/carabiner snapshot trap already documented for the
+    # main app. This does NOT help a from-scratch checkout: `xcodegen generate` itself
+    # resolves the sources above at GENERATE time and fails outright if dist/chrome does
+    # not exist yet (confirmed by moving dist/ aside and generating — three "missing
+    # source directory" errors), so the very first build after cloning still needs
+    # extension/build.sh run once beforehand (release.sh now does this; see its comment).
+    # What this DOES fix is every build after that: once dist/chrome exists and the
+    # project has been generated once, xcodebuild copies whatever dist/chrome/{src,icons}
+    # currently contain at its own Copy Bundle Resources step — folder references are not
+    # enumerated into the pbxproj, so neither editing a file's content nor adding a new
+    # one under extension/src/ requires a fresh `xcodegen generate`. A pre-build script is
+    # the first build phase for this target, strictly before that copy step, so refreshing
+    # dist/chrome here means the copy always sees current content. Verified by editing
+    # extension/src/worker.js, rebuilding with no manual build.sh run and no regenerate,
+    # and diffing the built appex's copy against the edited source.
+    preBuildScripts:
+      - name: Refresh extension/dist/chrome from extension/src
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          "$SRCROOT/../extension/build.sh" >/dev/null
+    # Like Carabiner/Info.plist (see app/.gitignore), this is a build product xcodegen
+    # writes fresh from `properties` on every `generate` — a hand-authored file at this
+    # path is silently overwritten with xcodegen's bare default template (no NSExtension
+    # key), which is a real trap: the appex builds and embeds fine, and only fails at
+    # Safari's own load step. The NSExtension dict has to live here, not in a checked-in
+    # plist file.
+    info:
+      path: CarabinerSafariExtension/Info.plist
+      properties:
+        CFBundleDisplayName: Carabiner
+        # Xcode's default template hardcodes "1.0"/"1" here, which xcodegen reproduces
+        # verbatim — and Xcode then warns at build time that the appex's CFBundleVersion
+        # must match its parent app's. Point both at the same project-level values the
+        # Carabiner target uses so an app version bump doesn't have to be made twice.
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.Safari.web-extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SafariWebExtensionHandler
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner.SafariExtension
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "Apple Development"
+        DEVELOPMENT_TEAM: ${CARABINER_TEAM_ID}
+        ENABLE_HARDENED_RUNTIME: YES
+        GENERATE_INFOPLIST_FILE: NO
+        # The appex MUST be sandboxed or pkd refuses to register it and Safari
+        # never lists the extension ("plug-ins must be sandboxed" - see the
+        # entitlements file's comment). The app stays unsandboxed; only this
+        # target carries the entitlement.
+        CODE_SIGN_ENTITLEMENTS: CarabinerSafariExtension/CarabinerSafariExtension.entitlements
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          DEVELOPMENT_TEAM: ${CARABINER_RELEASE_TEAM_ID}
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
           CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
   CarabinerTests:
     type: bundle.unit-test

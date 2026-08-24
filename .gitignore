@@ -15,3 +15,8 @@ dist/
 
 # llvm coverage droppings
 *.profraw
+
+# Licensed font — never ships in the public repo. Drop the .otf into
+# app/Carabiner/BrandAssets/ locally; Brand.mono() falls back to system
+# monospaced when it is absent.
+app/Carabiner/BrandAssets/*.otf

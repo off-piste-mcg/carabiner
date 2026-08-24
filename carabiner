@@ -68,6 +68,31 @@ SILENT=0
 URL=""
 NOTIFY=0            # show a macOS notification when headless (launched from the hotkey)
 [ -t 1 ] || NOTIFY=1
+
+# --- cleanup on kill -------------------------------------------------------
+# The app's grab watchdog terminates the process GROUP (see CLAUDE.md, rough
+# edges), so ffmpeg/yt-dlp die with us — but our own `rm` lines never run, and a
+# kill used to leak up to ~84 MB of hidden temp source into $OUTDIR per grab,
+# plus reencode's .part file and gallery-dl's mktemp dir. Bash runs a trap only
+# after the foreground child exits; that is fine here precisely BECAUSE the
+# watchdog signals the whole group — the child is dying too (measured: pipes hit
+# EOF in 0.07s), so the trap fires promptly rather than waiting out the encode.
+#
+# CLEANUP_PART / CLEANUP_GLTMP are registered at the moment the file/dir exists
+# and cleared once the normal path has dealt with it. Deliberately NOT a glob
+# over $OUTDIR (e.g. .*.part.mp4): $OUTDIR is shared, and a glob would let one
+# killed grab delete a concurrent grab's live encode out from under it.
+CLEANUP_PART=""     # reencode's in-flight .part file
+CLEANUP_GLTMP=""    # ig_gallery's mktemp -d
+cleanup_on_kill() {
+  trap - TERM INT   # re-entry guard: a second signal must not re-run the rms
+  [ -n "$CLEANUP_PART" ]  && rm -f "$CLEANUP_PART"
+  [ -n "$CLEANUP_GLTMP" ] && rm -rf "$CLEANUP_GLTMP"
+  rm -f "$OUTDIR"/.carabiner_src_$$.*   # ig_video's temp source is $$-named, so
+                                        # this cannot touch another process's files
+  exit 143
+}
+trap cleanup_on_kill TERM INT
 SAVED=()            # basenames saved this run — drives the notification summary
 
 # ---------------------------------------------------------------------------
@@ -296,7 +321,28 @@ reencode() {
     *" -c:v copy "*) progress "convert:remux" ;;
     *)               progress "convert:encode" ;;
   esac
-  ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$out"
+  # Encode to a hidden sibling and rename on success, so a killed encode never leaves
+  # anything in ~/Downloads that looks like a grab. This is not hypothetical tidiness:
+  # SIGTERM'd 4s into a 120s encode (the app's grab watchdog terminates the process
+  # group), the bundled ffmpeg left a 19 MB file that QuickTime opens happily and that
+  # simply ends at 25s — not corrupt, just silently short, and indistinguishable from a
+  # real grab until you watch it to the end. Measured 2026-08-14.
+  #
+  # Two details are load-bearing. The name still ends in .mp4, because ffmpeg picks its
+  # muxer from the output extension and a bare ".part" makes it fail outright. And the
+  # part file sits in the SAME directory as $out, so the promotion is a rename on one
+  # filesystem — atomic, never a copy the watchdog could interrupt halfway.
+  local part="${out%/*}/.${out##*/}.part.mp4"
+  rm -f "$part"                       # a previous kill may have left one
+  CLEANUP_PART="$part"                # the kill trap owns it while ffmpeg runs
+  if ffmpeg -y -loglevel error -i "$src" "${REENC_ARGS[@]}" "$part"; then
+    mv -f "$part" "$out"
+    CLEANUP_PART=""
+  else
+    rm -f "$part"
+    CLEANUP_PART=""
+    return 1
+  fi
 }
 
 lower() { echo "$1" | tr 'A-Z' 'a-z'; }
@@ -400,6 +446,7 @@ ig_video() {
 ig_gallery() {
   local url="$1" code="$2" slide="$3"
   local tmp; tmp="$(mktemp -d "${TMPDIR:-/tmp}/carabiner_gl_XXXXXX")"
+  CLEANUP_GLTMP="$tmp"                # the kill trap owns it until we rm it below
   local -a args=(--cookies-from-browser "$BROWSER" -D "$tmp" -q --write-metadata)
   [ -n "$slide" ] && args+=(--range "$slide")
 
@@ -414,7 +461,7 @@ ig_gallery() {
   progress download
   log="$(gallery-dl "${args[@]}" "$url" 2>&1)"; rc=$?
   if [ "$rc" -ne 0 ]; then
-    rm -rf "$tmp"
+    rm -rf "$tmp"; CLEANUP_GLTMP=""
     echo "$log" >&2
     # Last non-empty line is gallery-dl's actual complaint; trim the noisy prefixes it
     # puts on log lines so the notification body stays readable.
@@ -456,7 +503,7 @@ ig_gallery() {
     n=$((n+1))
   done < <(find "$tmp" -type f ! -name '*.json' -print0 | sort -z)
 
-  rm -rf "$tmp"
+  rm -rf "$tmp"; CLEANUP_GLTMP=""
   [ "$n" -gt 0 ] || die "gallery-dl downloaded nothing for this URL."
 }
 

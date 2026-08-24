@@ -18,7 +18,14 @@ final class MenuBarController: NSObject {
     /// fire is a test, not a grab — consumed in hotkeyFired(), never by the menu item, so
     /// clicking "Grab current tab" can't fake a ✓.
     var hotkeyTestHandler: (() -> Void)?
-    private var onboarding: OnboardingWindowController?
+    /// Every successful app-driven grab lands here (recorded in the shared grab path's
+    /// completion), and the main window renders it.
+    private let history = GrabHistoryStore()
+    private var mainWindow: MainWindowController?
+    /// Set by App.swift once the listener starts. Weak: GrabServer's owner is App.swift,
+    /// not this controller — this is read-only access for onboarding (task 9) to report
+    /// the server's state, not a second owner.
+    weak var grabServer: GrabServer?
 
     override init() {
         super.init()
@@ -27,10 +34,12 @@ final class MenuBarController: NSObject {
         if renderer.mark == nil { NSLog("Carabiner: StatusIcon asset missing — status item has no image") }
         ring = RingAnimator(button: statusItem.button, renderer: renderer)
         let menu = NSMenu()
-        let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab), keyEquivalent: "")
+        // Disambiguated: grab() now has a same-named overload (grab(url:browser:...)) for
+        // the explicit-URL path, so #selector needs the no-arg signature spelled out.
+        let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab as () -> Void), keyEquivalent: "")
         grabItem.target = self
         menu.addItem(grabItem)
-        let setupItem = NSMenuItem(title: "Setup & Permissions…", action: #selector(showOnboarding), keyEquivalent: "")
+        let setupItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: "")
         setupItem.target = self
         menu.addItem(setupItem)
         menu.addItem(.separator())
@@ -41,14 +50,59 @@ final class MenuBarController: NSObject {
         statusItem.menu = menu
     }
 
-    @objc func showOnboarding() {
-        if onboarding == nil {
-            onboarding = OnboardingWindowController(
-                checker: LivePermissionChecker(browser: Self.browser),
+    /// The Dock click's destination. Lazily built like onboarding; the model calls back
+    /// into the shared grab path, so a window grab and a hotkey grab are the same grab.
+    @objc func showMainWindow() {
+        if mainWindow == nil {
+            let model = MainViewModel(history: history)
+            model.isBusyElsewhere = { [weak self] in self?.busy ?? false }
+            model.onGrab = { [weak self] url in self?.grabFromWindow(url: url) }
+            // OnboardingViewModel is @MainActor; wrap the construction site minimally.
+            // This closure runs on the main queue (Dock click context).
+            let settingsModel = MainActor.assumeIsolated {
+                OnboardingViewModel(
+                    checker: LivePermissionChecker(browser: Self.browser,
+                                                   lastSeen: { [weak self] in self?.grabServer?.lastSeen ?? [:] },
+                                                   serverState: { [weak self] in self?.grabServer?.state ?? .stopped },
+                                                   loginItem: LiveLoginItemController()))
+            }
+            mainWindow = MainWindowController(
+                model: model,
+                settingsModel: settingsModel,
                 hotkeyIntercept: { [weak self] handler in self?.hotkeyTestHandler = handler },
                 clearIntercept: { [weak self] in self?.hotkeyTestHandler = nil })
         }
-        onboarding?.show()
+        mainWindow?.show()
+    }
+
+    /// ⌘,, the status-menu item and first launch: the main window with the settings
+    /// panel already open. Same lazy construction as showMainWindow().
+    @objc func showSettings() {
+        showMainWindow()
+        mainWindow?.showSettings()
+    }
+
+    /// A grab the main window submitted. The model already validated the URL and set its
+    /// own in-flight state; this posts the working banner (the window is a non-hotkey
+    /// caller, so it goes through notifyGrabStarted like GrabServer does) and feeds
+    /// progress and the outcome back to the model.
+    private func grabFromWindow(url: String) {
+        notifyGrabStarted()
+        grab(url: url, browser: Self.browser,
+             observer: { [weak self] event in self?.mainWindow?.model.handle(event) },
+             completion: { [weak self] result in self?.mainWindow?.model.grabFinished(result) })
+    }
+
+    /// A grab arriving from outside any window — today a URL dropped on the Dock icon.
+    /// Busy behaves like the hotkey path: log and drop (the working banner of the running
+    /// grab is already up; a second banner about refusing would upstage it).
+    func grabFromExternal(url: String) {
+        guard !busy else {
+            NSLog("Carabiner: dropped URL ignored — a grab is already running")
+            return
+        }
+        notifyGrabStarted()
+        grab(url: url, browser: Self.browser)
     }
 
     /// The hotkey's entry point. Only a real hotkey fire may satisfy the setup window's
@@ -64,6 +118,16 @@ final class MenuBarController: NSObject {
         grab()
     }
 
+    /// The server refuses a second concurrent grab rather than queueing it — see
+    /// GrabServer's 409 path.
+    var isBusy: Bool { busy }
+
+    /// The hotkey posts this itself before the tab read; the browser button has no tab
+    /// read, so its caller (GrabServer) posts it at the moment the request arrives —
+    /// otherwise the user would see no feedback at all during the network round trip
+    /// before `grab(url:browser:...)`'s own progress events start arriving.
+    func notifyGrabStarted() { notifier.grabStarted() }
+
     @objc func grab() {
         // Every outcome below is reported by notification, so if notifications are
         // unavailable the app has no voice at all — a failed grab looks exactly like a
@@ -78,8 +142,10 @@ final class MenuBarController: NSObject {
         // and sat frozen beside the dialog, both of which read as a download that had
         // already begun. Immediate feedback is the working banner's job (grabStarted(),
         // next line); the failure paths below call ring.finish() unconditionally, which
-        // is a no-op on a ring that never began.
-        ringStarted = false
+        // is a no-op on a ring whose timer was never started — that no-op is governed by
+        // RingAnimator's own `timer` state, not by `ringStarted`, so resetting
+        // `ringStarted` only in the shared grab(url:browser:...) below (rather than here
+        // too) does not change what these early returns do.
         // Before reading the tab, not after: resolve() drives AppleScript on this thread
         // and is itself part of the delay the user is waiting through. Any outcome below
         // takes this banner down and posts its own, so an early failure still shows
@@ -100,8 +166,47 @@ final class MenuBarController: NSObject {
             ring.finish(success: false)
             return
         }
-        NSLog("Carabiner: grabbing %@", url)
+        grab(url: url, browser: Self.browser)
+    }
+
+    /// The shared grab path. The hotkey reaches it after resolving the front tab; a
+    /// future non-hotkey caller (the browser-extension server, a later task) will reach
+    /// it with a URL the caller already had. Both share `busy`, the ring and the
+    /// notifier — two independent paths would double-post banners.
+    ///
+    /// `grabStarted()` is NOT posted here: the hotkey path posts it itself, before the
+    /// AppleScript tab read, because that read is itself part of the wait the working
+    /// banner is covering. `notifier` is private, so no other caller can post it that
+    /// way today — a future non-hotkey caller will need an internal helper on this class
+    /// to post the working banner before calling this method. That helper does not exist
+    /// yet and is out of scope here.
+    ///
+    /// Threading contract (on the caller, not enforced by this method): MUST be called
+    /// on the main queue — it reads/writes `busy` and touches `ring` and `notifier`,
+    /// none of which are thread-safe. `observer`, `userObserver` and `completion` are
+    /// all invoked on the main queue in turn, so a caller on another queue (e.g. an HTTP
+    /// server's request-handler queue) must hop to main before calling in, not assume
+    /// this method will do it.
+    func grab(url: String,
+              browser: Browser,
+              observer: ((ProgressEvent) -> Void)? = nil,
+              userObserver: ((String) -> Void)? = nil,
+              completion: ((GrabResult) -> Void)? = nil) {
+        // Per-grab state. This is the one place both callers (the hotkey, after its own
+        // tab-read failure paths return early, and any future direct caller) funnel
+        // through before work begins, and `ringStarted` is read only inside the
+        // onProgress closure installed below — so resetting it here, ahead of that
+        // closure's installation, is sufficient. It no longer also lives in grab()'s
+        // early lines; see the comment there for why removing it doesn't change that
+        // method's early-return behaviour.
+        ringStarted = false
+        NSLog("Carabiner: grabbing %@ (cookies: %@)", url, browser.rawValue)
         busy = true
+        // GrabRunner is a struct, so this copy — not a mutation of the shared `runner`
+        // property — is what lets each grab set its own `browser` without one caller's
+        // choice leaking into another's concurrent-looking-but-actually-serial grab.
+        var runner = self.runner
+        runner.browser = browser
         runner.onProgress = { [weak self] event in
             // onProgress arrives on GrabRunner's background queue; the ring and the
             // notifier's planner state are both main-only.
@@ -116,18 +221,24 @@ final class MenuBarController: NSObject {
                 // the gate keeps "no ring" and "ring ignores this" from blurring.
                 if self.ringStarted { self.ring.handle(event) }
                 self.notifier.handle(event)
+                observer?(event)
             }
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
-            let result = self.runner.run(url: url)
+            let result = runner.run(url: url)
             DispatchQueue.main.async {
                 NSLog("Carabiner: grab %@ — %@",
                       result.ok ? "succeeded" : (result.cancelled ? "cancelled" : "failed"),
                       result.message)
+                if let user = result.user { userObserver?(user) }
                 self.ring.finish(success: result.ok)
                 self.notifier.finished(result)
+                // The one recording point — hotkey, extension, window and Dock drop all
+                // funnel through here. The store ignores failures and cancels itself.
+                self.history.record(url: url, result: result)
                 self.busy = false
+                completion?(result)
             }
         }
     }

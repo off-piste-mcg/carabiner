@@ -1,0 +1,18 @@
+{
+  "name": "carabiner-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser extension button for Carabiner — hands the Instagram post you're looking at to Carabiner.app.",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "author": "OFF-PISTE",
+  "license": "UNLICENSED",
+  "type": "module",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
+}

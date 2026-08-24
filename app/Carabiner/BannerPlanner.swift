@@ -8,8 +8,11 @@ enum BannerAction: Equatable {
     case postWorking(body: String)
     /// Take the working banner down — nothing is being worked on right now.
     case removeWorking
-    /// Post the grab's outcome as a fresh banner.
-    case postOutcome(ok: Bool, message: String, user: String?)
+    /// Post the grab's outcome as a fresh banner. `usedFallbackBrowser` rides through from
+    /// `GrabResult` untouched (Finding 4, review fix round 1) — the planner makes no
+    /// decision about it, it just doesn't drop it on the floor; `Notifier.outcomeSubtitle`
+    /// is where it becomes words.
+    case postOutcome(ok: Bool, message: String, user: String?, usedFallbackBrowser: Browser?)
 }
 
 /// Decides what the banners say, and when, from the same progress events that drive the
@@ -54,7 +57,8 @@ struct BannerPlanner {
         currentBody = nil
         // Cancelling the carousel dialog is a deliberate act, not an outcome to report.
         if result.cancelled { return [.removeWorking] }
-        return [.postOutcome(ok: result.ok, message: result.message, user: result.user)]
+        return [.postOutcome(ok: result.ok, message: result.message, user: result.user,
+                             usedFallbackBrowser: result.usedFallbackBrowser)]
     }
 
     private mutating func post(_ body: String) -> [BannerAction] {

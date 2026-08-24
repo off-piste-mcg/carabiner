@@ -190,3 +190,276 @@ final class PermissionModelsTests: XCTestCase {
         XCTAssertFalse(PermissionRow.Tick.pending.isFailure)
     }
 }
+
+extension PermissionModelsTests {
+    func testBrowserButtonRowExists() {
+        XCTAssertTrue(PermissionRow.allCases.contains(.browserButton))
+    }
+    func testBrowserButtonIsGrantedOnlyWhenSeenRecently() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now), .notDetermined)
+        // A browser that has not checked in for a month is not proof of anything.
+        XCTAssertEqual(browserButtonStatus(lastSeen: now.addingTimeInterval(-60*60*24*30), now: now),
+                       .notDetermined)
+    }
+    func testBrowserButtonTurningOnStartsTheInstall() {
+        XCTAssertEqual(PermissionRow.browserButton.intent(desired: true, status: .notDetermined),
+                       .request)
+    }
+    func testBrowserButtonTitleAndWhy() {
+        XCTAssertEqual(PermissionRow.browserButton.title, "Instagram button")
+        XCTAssertFalse(PermissionRow.browserButton.why.isEmpty)
+    }
+    func testExistingRowsKeepTheGenericIntent() {
+        // The new row-aware wrapper must not change behaviour for the rows that already
+        // worked — it only exists so a row that cannot be prompted can say so.
+        for row in [PermissionRow.notifications, .browserAccess, .carouselDialog] {
+            for status: PermissionStatus in [.granted, .denied, .notDetermined, .targetNotRunning] {
+                XCTAssertEqual(row.intent(desired: true, status: status),
+                               toggleAction(desired: true, status: status),
+                               "\(row) changed behaviour at \(status)")
+            }
+        }
+    }
+}
+
+extension PermissionModelsTests {
+    func testFullDiskAccessRowExists() {
+        XCTAssertTrue(PermissionRow.allCases.contains(.fullDiskAccess))
+    }
+    func testFullDiskAccessAlwaysDeepLinks() {
+        // macOS has no API to grant FDA, and unlike Automation it cannot even be
+        // *prompted* for. Opening the right System Settings pane is the only honest
+        // action at every status — including .notDetermined, where every other row
+        // would prompt.
+        for status: PermissionStatus in [.notDetermined, .denied, .targetNotRunning] {
+            XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: status),
+                           .openSystemSettings)
+        }
+    }
+    func testFullDiskAccessCannotBePrompted() {
+        XCTAssertFalse(PermissionRow.fullDiskAccess.canBePrompted)
+        for row in [PermissionRow.notifications, .browserAccess, .carouselDialog, .browserButton] {
+            XCTAssertTrue(row.canBePrompted, "\(row) should still be promptable")
+        }
+    }
+    func testFullDiskAccessTitleAndWhy() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.title, "Full Disk Access")
+        XCTAssertFalse(PermissionRow.fullDiskAccess.why.isEmpty)
+    }
+    /// Turning fullDiskAccess "off" is meaningless (there's nothing we granted to revoke),
+    /// but the intent function must still resolve to something sane rather than crash —
+    /// `desired: false` always defers to the shared rule regardless of canBePrompted.
+    func testFullDiskAccessTurningOffDefersToTheSharedRule() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: false, status: .granted),
+                       toggleAction(desired: false, status: .granted))
+    }
+}
+
+// MARK: - Review fix round 1
+
+extension PermissionModelsTests {
+    // MARK: Finding 1 — browserButton must key off ANY known browser, not just the one
+    // MenuBarController happens to have configured for cookie-reading. Nothing pinned
+    // WHICH key got read before this, which is exactly how a Safari-only user's check-in
+    // at `lastSeen["safari"]` went silently unread.
+
+    func testMostRecentBrowserCheckInPicksTheFreshestAcrossAllKeys() {
+        let now = Date()
+        let dict = ["chrome": now.addingTimeInterval(-100), "safari": now.addingTimeInterval(-10)]
+        XCTAssertEqual(mostRecentBrowserCheckIn(dict), now.addingTimeInterval(-10))
+    }
+
+    func testMostRecentBrowserCheckInIsNilWhenNoBrowserHasCheckedIn() {
+        XCTAssertNil(mostRecentBrowserCheckIn([:]))
+    }
+
+    /// The actual regression: a Safari-ONLY check-in (no Chrome entry at all) must count.
+    /// A version of this logic keyed to a single hardcoded browser would return nil here.
+    func testMostRecentBrowserCheckInCountsSafariAlone() {
+        let now = Date()
+        XCTAssertEqual(mostRecentBrowserCheckIn(["safari": now]), now)
+    }
+
+    // MARK: Finding 3 — PermissionStatus.notApplicable
+
+    func testNotApplicablePresentationHasNoButtonAndExplainsWhy() {
+        let p = PermissionRow.fullDiskAccess.presentation(for: .notApplicable)
+        XCTAssertNil(p.buttonTitle)
+        XCTAssertEqual(p.action, .none)
+        XCTAssertEqual(p.detail, "Only needed if you use Safari")
+    }
+
+    /// Nothing to request when there's nothing missing — pins the case `toggleAction`
+    /// gained alongside `.notApplicable`.
+    func testToggleActionOnNotApplicableIsNothing() {
+        XCTAssertEqual(toggleAction(desired: true, status: .notApplicable), .nothing)
+    }
+
+    /// The property Finding 3 actually asked for: a non-promptable row (fullDiskAccess)
+    /// must NOT deep-link when there's nothing to grant — the blanket "not promptable ->
+    /// openSystemSettings" override from fix round 0 would otherwise still send a
+    /// Chrome-only user to the Privacy pane.
+    func testFullDiskAccessNotApplicableDoesNothing() {
+        XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: .notApplicable), .nothing)
+    }
+
+    /// notApplicable must not silently become the new "always deep-link" default for every
+    /// non-promptable row forever — pin that the three real actionable statuses are
+    /// unaffected by adding this case.
+    func testFullDiskAccessStillDeepLinksAtTheRealActionableStatuses() {
+        for status: PermissionStatus in [.notDetermined, .denied, .targetNotRunning] {
+            XCTAssertEqual(PermissionRow.fullDiskAccess.intent(desired: true, status: status),
+                           .openSystemSettings)
+        }
+    }
+
+    // MARK: Finding 3 / "ALSO FIX" — fullDiskAccessStatus(fd:errno:), the riskiest new
+    // green tick in the task, previously with zero test coverage.
+
+    func testFullDiskAccessStatusGrantedOnASuccessfulOpen() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: 3, errno: 0), .granted)
+    }
+
+    func testFullDiskAccessStatusDeniedOnEPERM() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: EPERM), .denied)
+    }
+
+    /// The absent-file case Finding 3 is entirely about: ENOENT must read as "not
+    /// applicable", not "denied" — conflating them is what invited Chrome-only users to
+    /// grant a permission they will never need.
+    func testFullDiskAccessStatusNotApplicableOnENOENT() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: ENOENT), .notApplicable)
+    }
+
+    /// Any other errno is a genuinely unexpected failure — must not be read as either a
+    /// grant or a denial.
+    func testFullDiskAccessStatusUnexpectedErrnoIsNotDetermined() {
+        XCTAssertEqual(fullDiskAccessStatus(fd: -1, errno: EIO), .notDetermined)
+    }
+}
+
+// MARK: - Review fix round 2
+
+extension PermissionModelsTests {
+    // MARK: Finding 1 — the round-1 tests only reached the PURE helper
+    // (`mostRecentBrowserCheckIn`), never `LivePermissionChecker.status(for: .browserButton)`
+    // itself. Proven by the reviewer: reverting the call site back to the original bug
+    // (`lastSeen()[browser.rawValue]` with the hardcoded `.chrome`) left all 199 tests
+    // green — the helper just became dead code, no failure, no warning. This goes through
+    // the real checker so a revert of THAT wiring, not just the helper, is caught. See
+    // task-11-report.md for the mutation test that confirms this actually has teeth.
+
+    func testLivePermissionCheckerBrowserButtonGoesGreenFromASafariOnlyCheckIn() {
+        // .chrome configured (as MenuBarController hardcodes today), but ONLY Safari has
+        // checked in — the exact shape of the original bug: a checker keyed to the single
+        // configured browser would see nothing here and report notDetermined forever.
+        let checker = LivePermissionChecker(browser: .chrome, lastSeen: { ["safari": Date()] })
+        let completed = expectation(description: "status(for: .browserButton) completes")
+        var result: PermissionStatus?
+        checker.status(for: .browserButton) { status in
+            result = status
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        XCTAssertEqual(result, .granted)
+    }
+
+    // MARK: Finding 4 — a future-dated lastSeen must not read as fresh forever.
+
+    func testBrowserButtonFutureTimestampIsNotGreen() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now.addingTimeInterval(3600), now: now),
+                       .notDetermined)
+    }
+
+    /// The instant of the check-in itself (elapsed == 0) is still legitimately fresh — the
+    /// fix must reject the FUTURE, not merely stop treating "now" as fresh.
+    func testBrowserButtonExactlyNowIsStillGreen() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+    }
+}
+
+// MARK: - Final review, Finding 2 — nothing read GrabServer.state, so a port collision
+// (or a local squatter winning the bind) presented as a button that silently did nothing,
+// contradicting the design doc's own claim that it "surfaces the failure in the
+// onboarding row". `browserButtonStatus` now takes the server's own state and answers
+// `.serverUnavailable` before it even looks at `lastSeen` — a stale-but-fresh check-in
+// from before the port was lost must not paper over a server that cannot accept new
+// connections right now.
+
+extension PermissionModelsTests {
+    func testBrowserButtonReportsServerUnavailableWhenTheListenerFailed() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now, serverState: .failed("Address already in use")),
+                       .serverUnavailable("Address already in use"))
+    }
+
+    /// The failure must win even over a check-in that would otherwise read as granted —
+    /// the whole point is that a check-in from BEFORE the port was lost is not proof the
+    /// extension can reach the app right now.
+    func testServerFailureOverridesAnOtherwiseFreshCheckIn() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now, serverState: .failed("in use")),
+                       .serverUnavailable("in use"))
+    }
+
+    /// `.stopped` (the state before `start()` has run, or in a build that never starts the
+    /// listener) is not a FAILURE — it must fall through to the ordinary lastSeen logic
+    /// rather than being read as a problem worth flagging.
+    func testStoppedServerStateIsNotTreatedAsAFailure() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: nil, now: now, serverState: .stopped), .notDetermined)
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now, serverState: .stopped), .granted)
+    }
+
+    /// The default parameter (`.listening`) keeps every pre-existing call and test — none
+    /// of which knew this parameter existed — behaving exactly as before.
+    func testListeningIsTheDefaultServerState() {
+        let now = Date()
+        XCTAssertEqual(browserButtonStatus(lastSeen: now, now: now), .granted)
+    }
+
+    // MARK: presentation(for: .serverUnavailable) — no dead-end action
+
+    func testServerUnavailablePresentationOffersNoAction() {
+        let p = PermissionRow.browserButton.presentation(for: .serverUnavailable("Address already in use"))
+        XCTAssertNil(p.buttonTitle)
+        XCTAssertEqual(p.action, .none)
+        XCTAssertEqual(p.tick, .cross)
+        XCTAssertTrue(p.detail?.contains("Address already in use") ?? false, "got: \(p.detail ?? "nil")")
+    }
+
+    // MARK: toggleAction / intent — .serverUnavailable can never be requested or deep-linked
+
+    func testToggleActionOnServerUnavailableIsAlwaysNothing() {
+        XCTAssertEqual(toggleAction(desired: true, status: .serverUnavailable("x")), .nothing)
+        XCTAssertEqual(toggleAction(desired: false, status: .serverUnavailable("x")), .nothing)
+    }
+
+    func testBrowserButtonIntentOnServerUnavailableIsNothingNotADeadEndPrompt() {
+        // browserButton.canBePrompted is true, so without the toggleAction case above this
+        // would have fallen into `.request` — a switch the user could flip that does
+        // nothing, exactly the dead button this finding exists to remove.
+        XCTAssertEqual(PermissionRow.browserButton.intent(desired: true, status: .serverUnavailable("x")),
+                       .nothing)
+    }
+
+    // MARK: wired through the real checker (mirrors round 2 Finding 1's own mutation-test
+    // rationale just above: a revert of the CALL SITE, not just the pure helper, must fail)
+
+    func testLivePermissionCheckerBrowserButtonReportsServerUnavailable() {
+        let checker = LivePermissionChecker(browser: .chrome, lastSeen: { [:] },
+                                            serverState: { .failed("Address already in use") })
+        let completed = expectation(description: "status(for: .browserButton) completes")
+        var result: PermissionStatus?
+        checker.status(for: .browserButton) { status in
+            result = status
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 2)
+        XCTAssertEqual(result, .serverUnavailable("Address already in use"))
+    }
+}

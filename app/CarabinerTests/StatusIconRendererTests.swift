@@ -23,7 +23,7 @@ final class StatusIconRendererTests: XCTestCase {
 
     func testSizes() {
         XCTAssertEqual(renderer().busy(progress: 0.5, alpha: 1).size, NSSize(width: 22, height: 22))
-        XCTAssertEqual(renderer().idle()?.size, NSSize(width: 20.5, height: 16))
+        XCTAssertEqual(renderer().idle()?.size, NSSize(width: 12, height: 16))
     }
 
     /// Alpha at a point on the ring, addressed by clock angle (0 = 12 o'clock, growing

@@ -84,6 +84,40 @@ if [ -d "$DEBUG_APP" ]; then
   # Debug is signed Apple Development, not Developer ID, so this must FAIL too.
   (assert_developer_id "$DEBUG_APP") >/dev/null 2>&1
   check "developer-id gate rejects an Apple Development build" "1" "$?"
+
+  # --- appex coverage (Finding 3, fix round 1) -----------------------------------------
+  # Same reasoning as the app-level block above, against the embedded appex instead: a
+  # real Debug build, not a fabricated fixture, so the negative cases are genuine (Debug
+  # carries get-task-allow and no secure timestamp on the appex too) and only the
+  # hardened-runtime gate is a true positive (ENABLE_HARDENED_RUNTIME is on for every
+  # build, gotcha #16). This also exercises preflight()'s own `find … -name '*.appex'`
+  # discovery pattern, not just the assert_* functions it calls — those are already
+  # covered generically by the positive-timestamp block further down.
+  APPEX="$DEBUG_APP/Contents/PlugIns/CarabinerSafariExtension.appex"
+  if [ -d "$APPEX" ]; then
+    (assert_hardened_runtime "$APPEX") >/dev/null 2>&1
+    check "hardened-runtime gate passes the embedded appex" "0" "$?"
+
+    (assert_no_get_task_allow "$APPEX") >/dev/null 2>&1
+    check "get-task-allow gate rejects a Debug-built appex" "1" "$?"
+
+    (assert_timestamped "$APPEX") >/dev/null 2>&1
+    check "timestamp gate rejects an un-timestamped appex" "1" "$?"
+
+    (assert_developer_id "$APPEX") >/dev/null 2>&1
+    check "developer-id gate rejects an Apple Development appex" "1" "$?"
+
+    # preflight()'s own discovery pattern, run in isolation: proves the *.appex glob
+    # under -maxdepth 1 finds exactly the one embedded appex, neither zero (silently
+    # skipping the whole check, which is what shipping a build with no appex embedded
+    # would look like from inside the loop) nor more than one.
+    actual_count=0
+    while IFS= read -r -d ''; do actual_count=$((actual_count + 1)); done \
+      < <(find "$DEBUG_APP/Contents/PlugIns" -maxdepth 1 -name '*.appex' -print0)
+    check "preflight finds exactly one embedded appex" "1" "$actual_count"
+  else
+    printf '  skip appex gate tests (no embedded appex — rebuild after task 10)\n'
+  fi
 else
   printf '  skip preflight gate tests (no Debug build — see the plan, Task 1 Step 5)\n'
 fi

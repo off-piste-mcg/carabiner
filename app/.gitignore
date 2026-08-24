@@ -3,6 +3,9 @@
 Carabiner.xcodeproj/
 Carabiner/Info.plist
 Carabiner/Carabiner.entitlements
+# Same story for the Safari extension target: its NSExtension dict lives in project.yml's
+# info.properties, and the file at this path is xcodegen's generated output, not source.
+CarabinerSafariExtension/Info.plist
 # xcodegen leaves "Carabiner 2.xcodeproj" style copies behind if the original is in use
 Carabiner*.xcodeproj/
 build/

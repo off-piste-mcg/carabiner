@@ -27,6 +27,50 @@ trick — and the reason it can't (and shouldn't) be a website. See
 > keyboard shortcut first — a global chord belongs to exactly one app, and the loser gets
 > no warning, it just silently never fires.
 
+### The Instagram button (Chrome and Safari)
+
+Carabiner can also put a small download button on Instagram posts, so you can save
+something straight out of your feed without opening it first. The button doesn't download
+anything itself — it just tells Carabiner which post you meant, and the app does the same
+grab it always did.
+
+1. Install the app above, then open **Setup & Permissions** from the menu-bar icon.
+2. Click **Allow** on the **Instagram button** row.
+   - **Safari** — the extension already ships inside Carabiner.app, so there is nothing to
+     download. Allow opens Safari's extension settings with Carabiner listed: switch it on,
+     then set it to **Always Allow on instagram.com**.
+   - **Chrome** — Allow opens the extension's Chrome Web Store page. **That listing does
+     not exist yet — see the note below.**
+3. The row turns green only once that extension has actually reached the app. It is never
+   a guess about whether something is "probably installed".
+4. Open Instagram. A small OFF-PISTE mark sits in the corner of a post's media — click it,
+   it fills into a progress ring, and the file lands in `~/Downloads` with the usual
+   notification. A carousel asks the same "this slide or all of them?" question as the
+   hotkey does.
+
+> **⚠️ Chrome Web Store listing: not published yet.** It will be **unlisted** — installable
+> by direct link, not searchable. Until it exists, the Chrome row's Allow button opens a
+> placeholder URL and nothing installs. When the listing is live, put its link here and in
+> `OnboardingViewModel.chromeWebStoreURL`:
+>
+> ```
+> Install for Chrome: https://chromewebstore.google.com/detail/<ID>   ← paste the real link
+> ```
+
+**What the button covers.** Instagram only, and only three surfaces: the home feed, profile
+grids, and post/reel permalink pages. **Stories are not covered** — deliberately, they are
+the most fragile surface on the site. For **YouTube and Pinterest the hotkey (⌃⌥⌘V) is
+still the answer**; it is untouched by any of this and keeps working everywhere, Instagram
+included.
+
+**Safari also needs Full Disk Access.** Safari keeps its cookies in a protected folder, and
+Carabiner has to read them to see a post as you — without it, Safari grabs fail. There is a
+row for it in the same Setup & Permissions window; macOS gives apps no way to grant or even
+prompt for this one, so the row sends you to System Settings and goes green only once the
+read genuinely succeeds. If Safari's cookies can't be read, Carabiner retries once using
+Chrome's cookies and tells you it did — worth knowing, since that may be a different
+Instagram account.
+
 Everything below is the manual route: the script on its own, and the Shortcut. You don't
 need it if you installed the app.
 
@@ -127,6 +171,8 @@ from Chrome by default — `export CARABINER_BROWSER=safari` for another browser
 
 - **[`carabiner`](carabiner)** — the tool. One script, does everything above.
 - **[`setup.sh`](setup.sh)** — deps + PATH links.
+- **[`extension/`](extension)** — the Instagram button (one source tree, Chrome + Safari).
+  It finds posts and asks the app to grab them; it never downloads anything itself.
 - **[`CLAUDE.md`](CLAUDE.md)** — architecture + the hard-won gotchas. Read before changing anything.
 - **[`files/`](files)** — the original seed bundle: the proven `igdl` functions and the
   click-to-pick bookmarklet, kept for reference.
@@ -139,5 +185,12 @@ from Chrome by default — `export CARABINER_BROWSER=safari` for another browser
   `gallery-dl` video slips through, re-run with the reel's direct link so it routes
   through the video path.
 - **`missing dependency`** → run `./setup.sh` again.
+- **No button on Instagram** → check the **Instagram button** row in Setup & Permissions is
+  green. If it is, remember the button only appears on the feed, profile grids and post/reel
+  pages — never on Stories. Instagram changes its page layout regularly and that can knock
+  the button's placement out; the hotkey is unaffected and is always the fallback.
+- **Safari: grabs fail / nothing downloads** → grant **Full Disk Access** in Setup &
+  Permissions. Safari's cookies live in a protected folder and macOS blocks the read until
+  you do.
 - **Private posts** → you must be able to see the post while logged in; Carabiner can
   only reach what your own session can.

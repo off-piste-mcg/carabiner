@@ -95,7 +95,7 @@ assert_developer_id() {  # $1 = bundle
 }
 
 preflight() {  # $1 = bundle
-  local app="$1" f count=0
+  local app="$1" f count=0 appex appex_count
   note "preflight: $app"
   assert_hardened_runtime "$app"
   assert_no_get_task_allow "$app"
@@ -117,6 +117,39 @@ preflight() {  # $1 = bundle
     die "no Contents/Resources/bin — run scripts/fetch-deps.sh before releasing.
   Shipping without it produces an app that silently needs Homebrew on the
   recipient's machine, which is the whole reason bundling exists."
+  fi
+
+  # The appex (Contents/PlugIns) is nested Release code same as Resources/bin, and
+  # notarization checks it exactly as strictly. Unlike Resources/bin, Xcode signs it for
+  # us (gotcha #19 — PlugIns is auto-signed, unlike Resources), so this is read-only
+  # verification, not a second signing loop. Required, not optional: embed:true in
+  # project.yml means every build has one, so a missing appex here means the build itself
+  # is broken, not that an optional step was skipped.
+  if [ -d "$app/Contents/PlugIns" ]; then
+    appex_count=0
+    while IFS= read -r -d '' appex; do
+      assert_hardened_runtime "$appex"
+      assert_no_get_task_allow "$appex"
+      assert_timestamped "$appex"
+      assert_developer_id "$appex"
+      # Walk every nested Mach-O too, not just the appex's own signature — it has none of
+      # its own today (no bundled binaries, unlike Resources/bin), but this doesn't cost
+      # anything and stops the gate from silently losing coverage if that ever changes.
+      while IFS= read -r f; do
+        file -b "$f" | grep -q "Mach-O" || continue
+        assert_hardened_runtime "$f"
+        assert_timestamped "$f"
+      done < <(find "$appex" -type f)
+      appex_count=$((appex_count + 1))
+    done < <(find "$app/Contents/PlugIns" -maxdepth 1 -name '*.appex' -print0)
+    [ "$appex_count" -gt 0 ] \
+      || die "Contents/PlugIns exists but has no .appex in it — expected
+  CarabinerSafariExtension.appex. Check project.yml's embed:true dependency."
+    note "preflight: $appex_count appex(es) under PlugIns hardened, timestamped, and clean"
+  else
+    die "no Contents/PlugIns — expected CarabinerSafariExtension.appex, embedded via
+  project.yml's Carabiner target dependencies (embed: true). A build missing it is not
+  shipping the Safari extension at all."
   fi
   note "preflight passed"
 }
@@ -175,6 +208,13 @@ main() {
 
   # Idempotent; a release without bundled binaries is an app that silently needs Homebrew.
   "$REPO/scripts/fetch-deps.sh" || die "scripts/fetch-deps.sh failed"
+
+  # Also idempotent, and MUST run before build_app's `xcodegen generate`: project.yml
+  # sources CarabinerSafariExtension's resources from extension/dist/chrome, which is
+  # gitignored. On a clean checkout it does not exist at all, and xcodegen generate fails
+  # outright ("Target CarabinerSafariExtension has a missing source directory") rather
+  # than producing a broken app — loud, but only if this runs first.
+  "$REPO/extension/build.sh" || die "extension/build.sh failed"
 
   local stage; stage="$(mktemp -d)"
   # Keep the staging tree on failure. An unconditional cleanup here threw away a signed,

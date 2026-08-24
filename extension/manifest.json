@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Carabiner",
+  "version": "0.1.0",
+  "description": "Download the Instagram post you're looking at, cleanly, with Carabiner.",
+  "icons": {
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.instagram.com/*",
+    "http://127.0.0.1:51847/*"
+  ],
+  "background": {
+    "service_worker": "src/worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.instagram.com/*"
+      ],
+      "js": [
+        "src/browser.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/shortcode.js",
+        "src/ring.js",
+        "src/containers.js",
+        "src/grabTracker.js",
+        "src/slideIndex.js",
+        "src/actionBar.js"
+      ],
+      "matches": [
+        "*://*.instagram.com/*"
+      ]
+    }
+  ]
+}
