@@ -191,8 +191,10 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.offpiste.carabiner
-        MARKETING_VERSION: "0.1.2"
-        CURRENT_PROJECT_VERSION: "3"
+        # No MARKETING_VERSION / CURRENT_PROJECT_VERSION here on purpose: this target
+        # inherits the project-level pair above. A copy at this level silently outranks
+        # it, which is how the app once read 0.1.2 while its embedded appex read 0.2.0 —
+        # the exact mismatch the project-level comment exists to prevent.
         GENERATE_INFOPLIST_FILE: NO
         # Points at AppIcon.icon (the appiconset is gone). Explicit because xcodegen only
         # infers this default while an .appiconset exists in the catalog.
