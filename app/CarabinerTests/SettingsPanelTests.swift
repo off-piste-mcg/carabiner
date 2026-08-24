@@ -28,4 +28,26 @@ final class SettingsPanelTests: XCTestCase {
     func testNotApplicableRowOffersNothing() {
         XCTAssertNil(SettingsPanel.actionTitle(row: .fullDiskAccess, isOn: false, notApplicable: true))
     }
+
+    func testManageTitleOnGrantedSystemSettingsRows() {
+        for row: PermissionRow in [.notifications, .browserAccess, .carouselDialog, .fullDiskAccess] {
+            XCTAssertEqual(SettingsPanel.manageTitle(row: row, isOn: true, notApplicable: false),
+                           "MANAGE", "\(row) granted should offer MANAGE")
+        }
+    }
+
+    func testManageTitleAbsentWhenUngranted() {
+        for row: PermissionRow in [.notifications, .browserAccess, .carouselDialog, .fullDiskAccess] {
+            XCTAssertNil(SettingsPanel.manageTitle(row: row, isOn: false, notApplicable: false),
+                         "\(row) ungranted shows ALLOW, not MANAGE")
+        }
+    }
+
+    func testManageTitleAbsentWhereItWouldLie() {
+        // launchAtLogin has a real DISABLE; browserButton has no pane to open.
+        XCTAssertNil(SettingsPanel.manageTitle(row: .launchAtLogin, isOn: true, notApplicable: false))
+        XCTAssertNil(SettingsPanel.manageTitle(row: .browserButton, isOn: true, notApplicable: false))
+        // Nothing granted → nothing to manage (no-Safari machine's FDA row).
+        XCTAssertNil(SettingsPanel.manageTitle(row: .fullDiskAccess, isOn: true, notApplicable: true))
+    }
 }

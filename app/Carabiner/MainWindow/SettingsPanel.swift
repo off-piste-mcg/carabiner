@@ -20,6 +20,9 @@ struct SettingsContent: View {
                     actionTitle: SettingsPanel.actionTitle(row: row,
                                                   isOn: model.isOn(row),
                                                   notApplicable: model.isNotApplicable(row)),
+                    manageTitle: SettingsPanel.manageTitle(row: row,
+                                                  isOn: model.isOn(row),
+                                                  notApplicable: model.isNotApplicable(row)),
                     action: { desiredOn in model.setEnabled(desiredOn, for: row) })
             }
             hotkeyRow
@@ -68,6 +71,19 @@ enum SettingsPanel {
         if !isOn { return "ALLOW" }
         return row == .launchAtLogin ? "DISABLE" : nil
     }
+
+    /// The quiet secondary action on a granted row: MANAGE opens the System Settings
+    /// pane where the real switch lives (macOS gives the app no revoke of its own).
+    /// Only rows whose switch IS in System Settings — not launchAtLogin (real DISABLE),
+    /// not browserButton (its off-switch is the browser's extension UI, unreachable
+    /// from here); never when off or notApplicable.
+    static func manageTitle(row: PermissionRow, isOn: Bool, notApplicable: Bool) -> String? {
+        guard isOn, !notApplicable else { return nil }
+        switch row {
+        case .notifications, .browserAccess, .carouselDialog, .fullDiskAccess: return "MANAGE"
+        case .launchAtLogin, .browserButton: return nil
+        }
+    }
 }
 
 /// One permission row: dot, mono caps title, quiet detail, optional pill action.
@@ -78,7 +94,10 @@ private struct PanelRow: View {
     let detail: String
     let state: RowState
     let actionTitle: String?
-    /// Called with the desired on/off — ALLOW sends true, DISABLE sends false.
+    /// MANAGE — quiet, hollow: navigates to System Settings rather than acting.
+    let manageTitle: String?
+    /// Called with the desired on/off — ALLOW sends true, DISABLE and MANAGE send false
+    /// (a granted row's "off" resolves to .openSystemSettings in the model).
     let action: (Bool) -> Void
 
     var body: some View {
@@ -98,6 +117,14 @@ private struct PanelRow: View {
                     .foregroundStyle(.black)
                     .padding(.horizontal, 10).padding(.vertical, 4)
                     .background(Capsule().fill(Brand.yellow))
+            }
+            if let manageTitle {
+                Button(manageTitle) { action(false) }
+                    .buttonStyle(.plain)
+                    .font(Brand.mono(10)).kerning(1)
+                    .foregroundStyle(.black.opacity(0.6))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule().strokeBorder(.black.opacity(0.3), lineWidth: 1))
             }
         }
         .accessibilityElement(children: .combine)
