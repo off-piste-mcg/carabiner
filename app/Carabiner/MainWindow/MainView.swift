@@ -85,7 +85,7 @@ struct MainView: View {
                 .frame(height: 34)
                 .background {
                     if #available(macOS 26.0, *) {
-                        Color.clear.glassEffect(.regular, in: Capsule())
+                        Color.clear.glassEffect(.clear, in: Capsule())
                     } else {
                         Capsule().fill(.white.opacity(0.55))
                     }

@@ -37,7 +37,7 @@ struct SideRail: View {
         .background {
             // Liquid Glass on Tahoe; the same frost as always on 13–15.
             if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))
+                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 22))
             } else {
                 RoundedRectangle(cornerRadius: 22).fill(.regularMaterial)
             }
@@ -88,7 +88,7 @@ struct SideRail: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .background {
             if #available(macOS 26.0, *) {
-                Color.clear.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))
+                Color.clear.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 22))
             } else {
                 RoundedRectangle(cornerRadius: 22).fill(.regularMaterial)
             }

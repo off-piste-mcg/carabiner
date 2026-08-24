@@ -21,9 +21,17 @@ re-encode the call sites as parameters):
 
 | Surface | File | macOS 26 | Fallback (today's code, unchanged) |
 |---|---|---|---|
-| Rail | `SideRail.swift` `rail` | `.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22))` | `.background(RoundedRectangle(cornerRadius: 22).fill(.regularMaterial))` |
+| Rail | `SideRail.swift` `rail` | `.glassEffect(.clear, in: RoundedRectangle(cornerRadius: 22))` | `.background(RoundedRectangle(cornerRadius: 22).fill(.regularMaterial))` |
 | Expanded card | `SideRail.swift` `expandedCard` | same as rail | same as rail |
-| Link field | `MainView.swift` `linkBar` | `.glassEffect(.regular, in: Capsule())` | `.background(Capsule().fill(.white.opacity(0.55)))` |
+| Link field | `MainView.swift` `linkBar` | `.glassEffect(.clear, in: Capsule())` | `.background(Capsule().fill(.white.opacity(0.55)))` |
+
+**Corrected 2026-08-24, after shipping `.regular` first:** `.regular` glass rendered
+but was visually indistinguishable from the old `.regularMaterial` frost over this
+soft gradient — Wisse reported "still the grayish bg" and a tint experiment proved
+the glass branch was executing fine. The variant is `.clear` (transparent, strong
+lensing), which is visibly glass on this canvas. If a future macOS makes `.clear`
+too low-contrast for the card text, tune with `.tint()` before reaching for
+`.regular`, which reads as frost here.
 
 No `GlassEffectContainer`: the shapes never approach each other, so there is
 nothing to blend or morph. The card/rail open-close transition
