@@ -113,6 +113,32 @@ Replaces `MainView`'s stacked grab-box + list. Same `MainViewModel`, same
   `App.swift`/`MenuBarController`, same "only thing that prompts on fresh
   installs" property.
 
+## Revision 2026-08-24 — the left rail (supersedes §2's RECENT section and §3's panel presentation)
+
+After the first build, Wisse iterated with two mockups. The navigation is now a
+**persistent collapsed rail on the left that expands in place**:
+
+- **At rest:** a slim frosted rounded rail floating inset on the left edge (icons
+  only, top-aligned: grabs, settings). The canvas is otherwise a pure poster —
+  the RECENT list under the bar and the yellow settings pill top-right are GONE.
+- **On click:** the rail expands into a ~300pt frosted rounded card (same inset
+  float, no dark scrim — the hero stays visible beside it). Yellow ✕ pill at the
+  card's top-left closes it; Esc and clicking the canvas also collapse. One panel
+  at a time.
+- **RECENT GRABS card:** header + rows — thumbnail, a content summary derived
+  from the saved files' extensions (`2 IMAGES, 1 VIDEO`), and `FROM @USER` +
+  relative time. Unparsable entries (the YouTube/Pinterest `saved to ~/Downloads`
+  rows) render as `SAVED TO DOWNLOADS`, dimmed. Row behaviors carry over:
+  double-click opens, context menu Reveal/Open, missing-file dimming.
+- **SETTINGS card:** the same permission-row content as before, re-housed in the
+  card chrome. `OnboardingViewModel` still untouched.
+- **Auto-peek:** when a window-initiated grab finishes successfully and no panel
+  is open, the grabs card slides out to show the new row, then collapses after a
+  few seconds. A manual open is never auto-collapsed.
+- Model state: `settingsShown: Bool` becomes `panel: SidePanel?` (`.grabs` /
+  `.settings`); ⌘,/status-menu/first-launch set `.settings`; window close resets
+  to nil; the hotkey-test cancel now fires when the panel leaves `.settings`.
+
 ## 6 · Verification
 
 - Existing unit tests (view models, planners, gates) must pass unchanged —
