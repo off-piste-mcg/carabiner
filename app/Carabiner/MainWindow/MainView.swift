@@ -67,7 +67,11 @@ struct MainView: View {
                 .padding(.top, 12)
             Spacer(minLength: 24)
         }
-        .padding(.horizontal, 56)
+        // Center in the canvas the rail leaves free, not the full window: the
+        // collapsed rail (48 + 14 margin) clips the bar at the 640pt minimum,
+        // and the expanded card (300 + 14) covers its whole left edge.
+        .padding(.leading, model.panel == nil ? 62 : 314)
+        .padding(.horizontal, model.panel == nil ? 56 : 24)
         .frame(maxWidth: .infinity)
     }
 
