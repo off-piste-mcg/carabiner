@@ -26,10 +26,13 @@ struct SideRail: View {
     }
 
     private var rail: some View {
-        VStack(spacing: 18) {
+        // Grabs at the top, Settings pinned to the bottom — the two are separate
+        // destinations, not a stacked list, so they read as such with the rail's
+        // height between them rather than 18pt.
+        VStack(spacing: 0) {
             railButton("photo.on.rectangle.angled", help: "Recent grabs") { model.openGrabs() }
+            Spacer(minLength: 24)
             railButton("gearshape", help: "Settings") { settings.refreshAll(); model.panel = .settings }
-            Spacer()
         }
         .padding(.vertical, 16)
         .frame(width: 48)
