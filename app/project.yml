@@ -12,8 +12,8 @@ packages:
 # appex whose CFBundleVersion doesn't match its parent app's.
 settings:
   base:
-    MARKETING_VERSION: "0.1.2"
-    CURRENT_PROJECT_VERSION: "3"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "4"
 targets:
   Carabiner:
     type: application
