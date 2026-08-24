@@ -19,7 +19,10 @@ struct SideRail: View {
                     .transition(.move(edge: .leading).combined(with: .opacity))
             }
         }
-        .padding([.leading, .top, .bottom], 14)
+        .padding([.leading, .bottom], 14)
+        // Below the traffic lights: the transparent titlebar draws them over the
+        // canvas at ~y20, and 14pt put the frosted corner right underneath them.
+        .padding(.top, 48)
     }
 
     private var rail: some View {
@@ -57,7 +60,7 @@ struct SideRail: View {
             }
             .buttonStyle(.plain)
             .help("Close")
-            .padding(.top, 30)      // clears the traffic-light region
+            .padding(.top, 20)      // the card itself now starts below the traffic lights
             .padding(.leading, 20)
             .padding(.bottom, 20)
 
