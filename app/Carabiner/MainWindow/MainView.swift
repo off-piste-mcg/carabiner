@@ -126,12 +126,15 @@ struct MainView: View {
             }
             .padding(.trailing, 10)
 
-            // Bottom-left: the hotkey hint. Bottom-right: wordmark + clock.
+            // Bottom-right cluster: the rail now covers the bottom-left corner full
+            // height, so the hotkey hint moved in beside the wordmark + clock rather
+            // than sit hidden behind the frosted rail material.
             VStack { Spacer()
                 HStack(alignment: .center) {
+                    Spacer()
                     Text("⌃⌥⌘V").font(Brand.mono(10)).kerning(1)
                         .foregroundStyle(.black.opacity(0.4))
-                    Spacer()
+                    Spacer().frame(width: 14)
                     HStack(spacing: 8) {
                         Image("Wordmark")
                             .resizable().scaledToFit().frame(height: 11)
