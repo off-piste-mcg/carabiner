@@ -81,6 +81,20 @@ final class MainViewModel: ObservableObject {
         onIntroFinished?()
     }
 
+    /// The window-close exit — ⌘W or the red traffic light while the explainer is up.
+    /// Marks it seen, same as SKIP and FINISH, so it doesn't reappear next launch. But
+    /// unlike them it fires NO hook: there is no window left to show a settings panel
+    /// in, and reusing onIntroSkipped here would also set onboardingShown (via
+    /// MainWindowController's fallthrough), which is wrong — it would silently deny a
+    /// fresh install its first-launch permissions panel forever. Leaving onboardingShown
+    /// false is exactly what lets the existing first-launch rule open that panel on the
+    /// next launch instead.
+    func dismissIntro() {
+        guard intro != nil else { return }
+        intro = nil
+        markIntroSeen()
+    }
+
     /// The Grab button / return key. Validates through the same allowlist as the
     /// extension and the Dock drop.
     func submit() {

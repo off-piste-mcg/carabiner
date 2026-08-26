@@ -136,8 +136,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         // Closing the window is the third way out of the explainer. Mark it seen, or it
-        // reappears next launch for anyone who leaves by that door.
-        model.skipIntro()
+        // reappears next launch for anyone who leaves by that door — but use the
+        // dedicated dismiss exit, not skipIntro(): there is no window here to show a
+        // settings panel in, and skipIntro's fallthrough would also set onboardingShown,
+        // silently denying a fresh install its first-launch permissions panel.
+        model.dismissIntro()
         cancelHotkeyTest()
         // A Dock click after closing with the panel open must reopen onto the plain
         // canvas, never the panel — this is what makes that true.

@@ -61,4 +61,34 @@ final class MainViewModelIntroTests: XCTestCase {
         XCTAssertNil(model.intro)
         XCTAssertEqual(seen, 0, "nothing to mark seen when no intro was showing")
     }
+
+    /// The window-close exit. It must mark the explainer seen (so it doesn't reappear),
+    /// but must NOT run either the SKIP or FINISH hook — there is no window to show a
+    /// settings panel in, and firing onIntroSkipped here would set onboardingShown too,
+    /// which is the bug this test guards: it would silently deny a fresh install its
+    /// first-launch permissions panel on every later launch.
+    func testDismissMarksSeenClearsTheIntroAndFiresNoHook() {
+        let model = makeModel()
+        var seen = 0, skipped = 0, finished = 0
+        model.markIntroSeen = { seen += 1 }
+        model.onIntroSkipped = { skipped += 1 }
+        model.onIntroFinished = { finished += 1 }
+        model.showIntro()
+        model.dismissIntro()
+        XCTAssertNil(model.intro)
+        XCTAssertEqual(seen, 1)
+        XCTAssertEqual(skipped, 0, "closing the window must not run the skip fallthrough")
+        XCTAssertEqual(finished, 0, "closing the window must not run the settings handoff")
+    }
+
+    /// Safe to call with no intro showing — an ordinary window close (e.g. from the
+    /// settings panel) must not mark anything.
+    func testDismissIsSafeToCallWithNoIntroShowing() {
+        let model = makeModel()
+        var seen = 0
+        model.markIntroSeen = { seen += 1 }
+        model.dismissIntro()
+        XCTAssertNil(model.intro)
+        XCTAssertEqual(seen, 0, "nothing to mark seen when no intro was showing")
+    }
 }
