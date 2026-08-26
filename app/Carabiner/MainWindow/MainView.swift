@@ -24,9 +24,22 @@ struct MainView: View {
             background
                 .contentShape(Rectangle())
                 .onTapGesture { if model.panel != nil { model.collapsePanel() } }
-            content
-            furniture
-            SideRail(model: model, history: history, settings: settings)
+            // The intro is a full-canvas takeover: while it is up there is exactly one
+            // thing to do, so the grab box, the corner furniture and the rail are not
+            // merely covered — they are not built.
+            if let intro = model.intro {
+                // No settings.refreshAll() here: finishIntro fires onIntroFinished, which
+                // MainWindowController wires to showSettings() — and that already
+                // refreshes. Refreshing in both places would re-run every live
+                // permission check twice on the handoff.
+                IntroView(intro: intro,
+                          onSkip: { model.skipIntro() },
+                          onFinish: { model.finishIntro() })
+            } else {
+                content
+                furniture
+                SideRail(model: model, history: history, settings: settings)
+            }
         }
         .animation(.easeOut(duration: 0.2), value: model.panel)
         .onExitCommand { if model.panel != nil { model.collapsePanel() } }
