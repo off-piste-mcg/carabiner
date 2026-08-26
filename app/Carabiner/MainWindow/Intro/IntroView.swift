@@ -36,15 +36,19 @@ struct IntroView: View {
         .padding(.bottom, 28)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .focusable()
-        .onMoveCommand { direction in
-            switch direction {
-            case .right: intro.next()
-            case .left:  intro.back()
-            default:     break
+        // Arrow-key paging: `.onMoveCommand`/`.onExitCommand` are focus-dependent and
+        // nothing here ever becomes first responder, so they were silently dead.
+        // `.keyboardShortcut` dispatches via `performKeyEquivalent` instead, which does
+        // not need focus — so these two zero-visual buttons are what actually make ←/→
+        // page. `IntroModel.next()`/`back()` already no-op at the bounds.
+        .background(
+            HStack {
+                Button("", action: intro.back).keyboardShortcut(.leftArrow, modifiers: [])
+                Button("", action: intro.next).keyboardShortcut(.rightArrow, modifiers: [])
             }
-        }
-        .onExitCommand { onSkip() }
+            .opacity(0)
+            .allowsHitTesting(false)
+        )
     }
 
     /// Dots left, SKIP right.
@@ -68,6 +72,7 @@ struct IntroView: View {
                     .foregroundStyle(.black.opacity(0.4))
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
             .help("Skip the introduction")
         }
     }
