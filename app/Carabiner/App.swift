@@ -86,7 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // No unconditional notification request any more: on a fresh install the setup
         // window is the only thing that triggers permission prompts, so every prompt
         // appears next to its explanation instead of naked at first launch.
-        if !UserDefaults.standard.bool(forKey: MainWindowController.settingsShownDefaultsKey) {
+        // The explainer comes first on a machine that has never seen it — including an
+        // upgrade from 0.1.x/0.2.0, where the in-page Instagram button is the newest
+        // thing and the least discoverable. Its own exits then decide whether the
+        // permissions panel opens (SET UP PERMISSIONS always; SKIP only on an install
+        // that has never been offered setup).
+        if IntroGate.shouldShow(.standard) {
+            controller.showIntro()
+        } else if !UserDefaults.standard.bool(forKey: MainWindowController.settingsShownDefaultsKey) {
             controller.showSettings()
         }
     }

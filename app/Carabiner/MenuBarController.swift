@@ -39,6 +39,9 @@ final class MenuBarController: NSObject {
         let grabItem = NSMenuItem(title: "Grab current tab", action: #selector(grab as () -> Void), keyEquivalent: "")
         grabItem.target = self
         menu.addItem(grabItem)
+        let introItem = NSMenuItem(title: "How Carabiner works", action: #selector(showIntro), keyEquivalent: "")
+        introItem.target = self
+        menu.addItem(introItem)
         let setupItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: "")
         setupItem.target = self
         menu.addItem(setupItem)
@@ -80,6 +83,13 @@ final class MenuBarController: NSObject {
     @objc func showSettings() {
         showMainWindow()
         mainWindow?.showSettings()
+    }
+
+    /// The status menu's "How Carabiner works". Same lazy construction as
+    /// showMainWindow(); reopening always starts at card 1.
+    @objc func showIntro() {
+        showMainWindow()
+        mainWindow?.showIntro()
     }
 
     /// A grab the main window submitted. The model already validated the URL and set its

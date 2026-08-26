@@ -49,6 +49,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             rootView: MainView(model: model, settings: settingsModel))
         window.setContentSize(NSSize(width: 720, height: 460))
         settingsModel.onBeginHotkeyTest = { [weak self] in self?.beginHotkeyTest() }
+        // Everything that touches UserDefaults lives here, not in the view: the model
+        // gets closures, so a model built in a test writes nothing.
+        model.markIntroSeen = { IntroGate.markSeen(.standard) }
+        model.onIntroFinished = { [weak self] in self?.showSettings() }
+        // SKIP still lands a fresh install on the permissions panel — the 0.2.0
+        // first-launch rule, unchanged. Skipping the explainer must not be a way to end
+        // up with a silently non-working app.
+        model.onIntroSkipped = { [weak self] in
+            guard let self else { return }
+            if !UserDefaults.standard.bool(forKey: Self.settingsShownDefaultsKey) {
+                self.showSettings()
+            }
+        }
         // Closing the panel (Esc/✕/canvas click) sets panel = nil directly in MainView,
         // bypassing windowWillClose — without this, a hotkey test left running keeps
         // the global intercept armed for up to 10s after the panel is gone. Cancelling
@@ -75,6 +88,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         UserDefaults.standard.set(true, forKey: Self.settingsShownDefaultsKey)
         settingsModel.refreshAll()
         model.panel = .settings
+        show()
+    }
+
+    /// First launch and the "How Carabiner works" menu item: the window with the
+    /// explainer over the canvas. Always starts at card 1 (showIntro builds a fresh
+    /// IntroModel), and does not touch introShown — dismissing it does that.
+    func showIntro() {
+        model.showIntro()
         show()
     }
 
@@ -114,6 +135,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeKey(_ notification: Notification) { settingsModel.refreshAll() }
 
     func windowWillClose(_ notification: Notification) {
+        // Closing the window is the third way out of the explainer. Mark it seen, or it
+        // reappears next launch for anyone who leaves by that door.
+        model.skipIntro()
         cancelHotkeyTest()
         // A Dock click after closing with the panel open must reopen onto the plain
         // canvas, never the panel — this is what makes that true.
