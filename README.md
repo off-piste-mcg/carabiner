@@ -18,10 +18,12 @@ trick — and the reason it can't (and shouldn't) be a website. See
 1. Download **Carabiner.dmg** from the [latest release](https://github.com/off-piste-mcg/carabiner/releases/latest).
 2. Open it and drag **Carabiner** to your Applications folder.
 3. Open Carabiner from Applications. It lives in the menu bar — there is no window.
-4. A **Setup & Permissions** window opens the first time. Click Allow on each row:
-   notifications, your browser, and System Events. You can reopen it any time from the
-   menu-bar icon.
-5. Open an Instagram post and press **⌃⌥⌘V**. The file lands in `~/Downloads`.
+4. The first time you open Carabiner it explains itself in three cards — what it does, the
+   three ways to ask for a file, and what to expect — then offers to set up permissions. You
+   can bring it back any time from the menu-bar icon: **How Carabiner works**.
+5. From there (or any time from the menu-bar icon) a **Setup & Permissions** window opens.
+   Click Allow on each row: notifications, your browser, and System Events.
+6. Open an Instagram post and press **⌃⌥⌘V**. The file lands in `~/Downloads`.
 
 > **One hotkey, one owner.** If you also installed the macOS Shortcut below, unbind its
 > keyboard shortcut first — a global chord belongs to exactly one app, and the loser gets

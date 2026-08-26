@@ -161,20 +161,33 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   default. Unlike every other row it can revoke itself (`unregister()` is real, where macOS
   offers no way to hand a TCC grant back), which is why `ToggleIntent` has a `.revoke` case.
   See gotcha #40 for the mapping that made it unreachable at first.
-  First launch opens the main window with the in-window settings panel already open
-  (reopenable via ⌘, or the status menu — see the main-window paragraph above): the
+  ⌘, and the status menu ("Settings…") open the main window with the in-window settings
+  panel already open (see the main-window paragraph above): the
   panel carries the same per-permission Allow rows with live status — notifications,
   browser Automation (launches the browser first; the OS can neither prompt nor report
   for a closed target), System Events for the carousel dialog — plus a hotkey test that
   catches the silently-lost-chord case (gotcha #14); that logic lives unchanged in
-  `OnboardingViewModel`, which the panel reuses rather than reimplements. On fresh
-  installs it is the only thing that triggers permission prompts. **Historical
+  `OnboardingViewModel`, which the panel reuses rather than reimplements. It remains the
+  only thing that triggers permission prompts. **Historical
   verification, still true of the rows' logic:** verified 2026-08-02 on a
   `tccutil`-reset machine (back when this lived in its own `Setup & Permissions`
   window, since replaced by the in-window panel), including the spec's flagged
   assumption: the System Events grant made through the window does cover the script's
   osascript dialog (TCC attributes the child to the app). See
   `docs/superpowers/specs/2026-08-02-onboarding-design.md`.
+  **First run now opens a three-card explainer instead** (`app/Carabiner/MainWindow/Intro/`,
+  spec `docs/superpowers/specs/2026-08-26-first-run-intro-design.md`): what Carabiner does,
+  the three ways to ask (in-page button / ⌃⌥⌘V / paste here), and what to expect. It is
+  gated on its own `introShown` key — deliberately NOT `onboardingShown`, which is already
+  true on every 0.1.x and 0.2.0 install and would have hidden the explainer from exactly
+  the upgraders the extension is newest to. SET UP PERMISSIONS hands off to the settings
+  panel; SKIP still opens that panel on an install that has never been offered setup, so
+  skipping cannot leave someone with a silently non-working app. Closing the window
+  instead — the third exit, `dismissIntro()` — marks the explainer seen but deliberately
+  does **not** mark setup as offered, so a fresh install still gets the permissions panel
+  on its next launch; the earlier version of this marked both keys and showed the panel on
+  no launch, ever, which review caught before it shipped. Reopen the explainer from the
+  status menu ("How Carabiner works"); there is no rail icon for it on purpose.
   Built with XcodeGen (`xcodegen generate` from `app/`; the `.xcodeproj` and the generated
   `Info.plist` are gitignored — `project.yml` is the single source of truth). **Requires a
   development code signature to work at all — see gotcha #11.** Build with:
