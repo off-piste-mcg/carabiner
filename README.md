@@ -21,8 +21,9 @@ trick — and the reason it can't (and shouldn't) be a website. See
 4. The first time you open Carabiner it explains itself in three cards — what it does, the
    three ways to ask for a file, and what to expect — then offers to set up permissions. You
    can bring it back any time from the menu-bar icon: **How Carabiner works**.
-5. From there (or any time from the menu-bar icon) a **Setup & Permissions** window opens.
-   Click Allow on each row: notifications, your browser, and System Events.
+5. From there (or any time from the menu-bar icon) a **Setup & Permissions** panel slides in
+   over the main window. Click Allow on each row: notifications, your browser, and System
+   Events.
 6. Open an Instagram post and press **⌃⌥⌘V**. The file lands in `~/Downloads`.
 
 > **One hotkey, one owner.** If you also installed the macOS Shortcut below, unbind its

@@ -51,8 +51,6 @@ final class MainViewModelIntroTests: XCTestCase {
         XCTAssertEqual(skipped, 0, "finish must not also run the skip fallthrough")
     }
 
-    /// Closing the window while the intro is up is a third exit. It must mark seen too,
-    /// or the explainer reappears every launch for anyone who leaves by that door.
     func testSkipIsSafeToCallWithNoIntroShowing() {
         let model = makeModel()
         var seen = 0
@@ -81,6 +79,9 @@ final class MainViewModelIntroTests: XCTestCase {
         XCTAssertEqual(finished, 0, "closing the window must not run the settings handoff")
     }
 
+    /// Closing the window while the intro is up is a third exit. It must mark seen too,
+    /// or the explainer reappears every launch for anyone who leaves by that door.
+    ///
     /// Safe to call with no intro showing — an ordinary window close (e.g. from the
     /// settings panel) must not mark anything.
     func testDismissIsSafeToCallWithNoIntroShowing() {
