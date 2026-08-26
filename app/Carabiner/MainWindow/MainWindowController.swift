@@ -15,6 +15,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     private var hotkeyModel = HotkeyTestModel()
     private var hotkeyTimer: Timer?
     private var panelCancellable: AnyCancellable?
+    /// Injected so tests can pin the intro/settings wiring against a scratch suite
+    /// instead of the real app's defaults. Defaults to `.standard`, so every existing
+    /// call site (App.swift, MenuBarController) is unaffected.
+    private let defaults: UserDefaults
 
     /// Same string as the retired onboarding window's shownDefaultsKey — existing
     /// installs must not re-run first-launch.
@@ -23,11 +27,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     init(model: MainViewModel,
          settingsModel: OnboardingViewModel,
          hotkeyIntercept: @escaping (@escaping () -> Void) -> Void,
-         clearIntercept: @escaping () -> Void) {
+         clearIntercept: @escaping () -> Void,
+         defaults: UserDefaults = .standard) {
         self.model = model
         self.settingsModel = settingsModel
         self.hotkeyIntercept = hotkeyIntercept
         self.clearIntercept = clearIntercept
+        self.defaults = defaults
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable,
                                           .fullSizeContentView],
@@ -51,14 +57,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         settingsModel.onBeginHotkeyTest = { [weak self] in self?.beginHotkeyTest() }
         // Everything that touches UserDefaults lives here, not in the view: the model
         // gets closures, so a model built in a test writes nothing.
-        model.markIntroSeen = { IntroGate.markSeen(.standard) }
+        model.markIntroSeen = { [weak self] in IntroGate.markSeen(self?.defaults ?? .standard) }
         model.onIntroFinished = { [weak self] in self?.showSettings() }
         // SKIP still lands a fresh install on the permissions panel — the 0.2.0
         // first-launch rule, unchanged. Skipping the explainer must not be a way to end
         // up with a silently non-working app.
         model.onIntroSkipped = { [weak self] in
             guard let self else { return }
-            if !UserDefaults.standard.bool(forKey: Self.settingsShownDefaultsKey) {
+            if !self.defaults.bool(forKey: Self.settingsShownDefaultsKey) {
                 self.showSettings()
             }
         }
@@ -83,9 +89,16 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// ⌘,, the status-menu item and first launch land here: the window with the
-    /// settings panel already open.
+    /// settings panel already open. dismissIntro() first: both ⌘, and the status-menu
+    /// item are live while the explainer is up, and MainView renders the intro INSTEAD
+    /// of the canvas/rail — without this, panel = .settings was a silent no-op behind
+    /// the intro, and closing from there via dismissIntro() left onboardingShown unset,
+    /// stranding a fresh install with neither the explainer nor the panel next launch.
+    /// dismissIntro() itself no-ops when no intro is showing, so the ordinary path
+    /// (intro already dismissed) is unaffected.
     func showSettings() {
-        UserDefaults.standard.set(true, forKey: Self.settingsShownDefaultsKey)
+        model.dismissIntro()
+        defaults.set(true, forKey: Self.settingsShownDefaultsKey)
         settingsModel.refreshAll()
         model.panel = .settings
         show()
@@ -93,8 +106,14 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
     /// First launch and the "How Carabiner works" menu item: the window with the
     /// explainer over the canvas. Always starts at card 1 (showIntro builds a fresh
-    /// IntroModel), and does not touch introShown — dismissing it does that.
+    /// IntroModel), and does not touch introShown — dismissing it does that. Collapses
+    /// any open panel and cancels a running hotkey test first: MainView renders the
+    /// intro INSTEAD of the panel, so leaving one open here would strand its global
+    /// hotkey intercept armed for up to 10s with no visible test UI, and would leave
+    /// the panel poised to silently reappear after SKIP/FINISH.
     func showIntro() {
+        model.collapsePanel()
+        cancelHotkeyTest()
         model.showIntro()
         show()
     }

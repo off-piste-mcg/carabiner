@@ -45,8 +45,11 @@ struct MainView: View {
         .onExitCommand { if model.panel != nil { model.collapsePanel() } }
         .frame(minWidth: 640, minHeight: 420)
         .ignoresSafeArea()   // under the transparent titlebar
-        // A URL dragged anywhere onto the canvas submits — same path as typing it.
+        // A URL dragged anywhere onto the canvas submits — same path as typing it. Gated
+        // on the intro being closed: while it is up there is deliberately exactly one
+        // thing to do, and a drop's stage/feedback can't render in the intro branch.
         .onDrop(of: [.url, .plainText], isTargeted: nil) { providers in
+            guard model.intro == nil else { return false }
             loadDroppedURL(from: providers) { dropped in
                 model.urlField = dropped
                 model.submit()
