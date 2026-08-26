@@ -120,9 +120,10 @@ against IG ToS. Keep it local. It's still shareable — each person runs it on t
   `SettingsPanel.actionTitle`; Esc, the ✕, and the scrim all close it.
   **`OnboardingWindowController` and `OnboardingView` are deleted** — don't go looking for
   them — `MainWindowController` now owns the hotkey-test plumbing that used to live there.
-  ⌘,, the status-menu item (retitled "Settings…") and first-launch auto-open all open the
-  main window with the panel already open; the defaults key string is unchanged
-  (`"onboardingShown"`). The Dock click itself is unchanged by this — it still opens the
+  ⌘, and the status menu (retitled "Settings…") open the main window with the settings
+  panel already open; the defaults key string is unchanged (`"onboardingShown"`). First
+  launch opens the explainer instead, which reaches the settings panel via SET UP PERMISSIONS,
+  SKIP (only when `onboardingShown` is false), or the next launch (if dismissed). The Dock click itself is unchanged by this — it still opens the
   plain canvas, no panel. A URL dropped on the Dock tile grabs too:
   `CFBundleDocumentTypes` accepts `public.url` (document-type acceptance, not a scheme
   claim) and `dockOpenAction` routes carabiner:// vs allowlisted https vs junk. History
