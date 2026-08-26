@@ -17,6 +17,9 @@ final class MainViewModel: ObservableObject {
     /// icons, MainWindowController.showSettings(), and the auto-peek; cleared by ✕ /
     /// Esc / a canvas click / window close.
     @Published var panel: SidePanel?
+    /// The first-run explainer, nil when it is not showing. A fresh IntroModel per
+    /// showing, so reopening from the menu always starts at card 1.
+    @Published var intro: IntroModel?
 
     enum SidePanel { case grabs, settings }
 
@@ -32,6 +35,14 @@ final class MainViewModel: ObservableObject {
     /// Reads MenuBarController.isBusy so a hotkey/extension grab in flight renders as
     /// "already grabbing" instead of silently queue-jumping into a 409-shaped no-op.
     var isBusyElsewhere: () -> Bool = { false }
+    /// Records that the explainer has been seen. Wired by MainWindowController to
+    /// IntroGate; defaulted here so a model built in a test writes nothing.
+    var markIntroSeen: () -> Void = {}
+    /// SKIP. MainWindowController uses it to fall through to the first-launch settings
+    /// panel when this install has never been offered setup.
+    var onIntroSkipped: (() -> Void)?
+    /// SET UP PERMISSIONS. MainWindowController opens the settings panel.
+    var onIntroFinished: (() -> Void)?
 
     init(history: GrabHistoryStore) {
         self.history = history
@@ -46,6 +57,28 @@ final class MainViewModel: ObservableObject {
     func collapsePanel() {
         peekCollapse?.cancel(); peekCollapse = nil
         panel = nil
+    }
+
+    /// First launch and the "How Carabiner works" menu item.
+    func showIntro() {
+        intro = IntroModel()
+    }
+
+    /// SKIP, and closing the window while the explainer is up. Marks it seen — an exit
+    /// by an unexpected door must not make the intro reappear next launch.
+    func skipIntro() {
+        guard intro != nil else { return }
+        intro = nil
+        markIntroSeen()
+        onIntroSkipped?()
+    }
+
+    /// SET UP PERMISSIONS on the last card.
+    func finishIntro() {
+        guard intro != nil else { return }
+        intro = nil
+        markIntroSeen()
+        onIntroFinished?()
     }
 
     /// The Grab button / return key. Validates through the same allowlist as the
